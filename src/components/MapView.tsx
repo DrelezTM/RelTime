@@ -4,21 +4,31 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { Layers, Loader2, Globe } from 'lucide-react'
 import {
   fetchStations, fetchRoutes, fetchGapeka, clearApiCache,
-  nowMs, msToDuration,
+  nowMs, msToDuration, msToHHMM,
   type Station, type Train, type Route,
 } from '../api'
 import type { FilterType } from './FilterPills'
 import type { FeatureCollection } from 'geojson'
 
+export interface MapController {
+  flyToStation: (code: string) => void
+  flyToTrain: (trainCode: string, trainId?: number, trainName?: string) => void
+  flyToCoordinates: (lng: number, lat: number, zoom?: number) => void
+  getCenter: () => [number, number] | null
+}
+
 interface MapViewProps {
   activeFilters: FilterType[]
   onError?: (err: string | null) => void
   onRegisterRetry?: (retryFn: () => void) => void
+  onDataLoaded?: (stations: Station[], trains: Train[]) => void
+  mapControllerRef?: React.MutableRefObject<MapController | null>
+  isDark?: boolean
 }
 
 type MapLayerMode = 'streets' | 'satellite'
 
-function buildMapStyle(mode: MapLayerMode): maplibregl.StyleSpecification {
+function buildMapStyle(mode: MapLayerMode, isDark = false): maplibregl.StyleSpecification | string {
   if (mode === 'satellite') {
     return {
       version: 8,
@@ -34,6 +44,11 @@ function buildMapStyle(mode: MapLayerMode): maplibregl.StyleSpecification {
       layers: [{ id: 'satellite-layer', type: 'raster', source: 'satellite-tiles' }],
     }
   }
+
+  if (isDark) {
+    return 'https://tiles.openfreemap.org/styles/dark'
+  }
+
   return {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
@@ -95,7 +110,7 @@ function buildRouteGeoJSON(routes: Route[]): FeatureCollection {
   }
 }
 
-function applyRouteLayersToMap(map: maplibregl.Map, routes: Route[]) {
+function applyRouteLayersToMap(map: maplibregl.Map, routes: Route[], isDark = false) {
   if (map.getLayer('train-routes')) map.removeLayer('train-routes')
   if (map.getLayer('train-routes-outline')) map.removeLayer('train-routes-outline')
   if (map.getSource('train-routes')) map.removeSource('train-routes')
@@ -109,9 +124,9 @@ function applyRouteLayersToMap(map: maplibregl.Map, routes: Route[]) {
     source: 'train-routes',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
     paint: {
-      'line-color': '#ffffff',
+      'line-color': isDark ? '#0b0f19' : '#ffffff',
       'line-width': 4.5,
-      'line-opacity': 0.7,
+      'line-opacity': isDark ? 0.9 : 0.7,
     },
   })
 
@@ -121,7 +136,7 @@ function applyRouteLayersToMap(map: maplibregl.Map, routes: Route[]) {
     source: 'train-routes',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
     paint: {
-      'line-color': '#4D6BFE',
+      'line-color': isDark ? '#60A5FA' : '#4D6BFE',
       'line-width': 2.5,
       'line-opacity': 0.9,
     },
@@ -258,12 +273,103 @@ function getActiveTrains(
   return results
 }
 
-export default function MapView({ activeFilters, onError, onRegisterRetry }: MapViewProps) {
+function createStationPopupHTML(station: Station, isDark = false): string {
+  const bg = isDark ? '#0f172a' : '#ffffff'
+  const textColor = isDark ? '#f8fafc' : '#1E232C'
+  const subColor = isDark ? '#94a3b8' : '#64748B'
+  const borderColor = isDark ? '#334155' : '#F1F5F9'
+  const linkBg = isDark ? '#1e293b' : '#EFF6FF'
+  const linkBorder = isDark ? '#3b82f6' : '#BFDBFE'
+  const linkText = isDark ? '#60a5fa' : '#1D4ED8'
+  const badgeBg = isDark ? '#831843' : '#FDF2F8'
+  const badgeBorder = isDark ? '#be185d' : '#F472B6'
+  const badgeText = isDark ? '#fbcfe8' : '#9D174D'
+
+  return `
+    <div style="background:${bg}; border-radius:12px; padding:10px 12px; font-family:'Plus Jakarta Sans',sans-serif; min-width:160px; color:${textColor}; box-shadow:0 8px 24px rgba(0,0,0,${isDark ? '0.4' : '0.12'});">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px;">
+        <span style="font-size:9px;font-weight:700;color:${badgeText};background:${badgeBg};padding:2px 6px;border-radius:999px;border:1px solid ${badgeBorder};">STASIUN</span>
+        <span style="font-size:10px;color:${subColor};font-weight:700;">${station.code}</span>
+      </div>
+      <div style="font-size:13px;font-weight:700;color:${textColor};">${station.name}</div>
+      <div style="margin-top:6px;padding-top:5px;border-top:1px solid ${borderColor};font-size:10.5px;color:${subColor};display:flex;flex-direction:column;gap:1.5px;">
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <span>Latitude:</span>
+          <strong style="color:${textColor};font-family:monospace;">${station.lat.toFixed(6)}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <span>Longitude:</span>
+          <strong style="color:${textColor};font-family:monospace;">${station.lng.toFixed(6)}</strong>
+        </div>
+      </div>
+      <a
+        href="https://www.google.com/maps/search/?api=1&query=${station.lat},${station.lng}"
+        target="_blank"
+        rel="noopener noreferrer"
+        style="display:flex;align-items:center;justify-content:center;gap:5px;margin-top:8px;padding:5px 8px;border-radius:8px;background:${linkBg};border:1px solid ${linkBorder};color:${linkText};font-size:10.5px;font-weight:700;text-decoration:none;cursor:pointer;"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        <span>Buka di Google Maps</span>
+      </a>
+    </div>
+  `
+}
+
+function createTrainPopupHTML(
+  train: Train,
+  isCommuter: boolean,
+  fromName: string,
+  toName: string,
+  nextStopName: string,
+  etaNext: string,
+  isDark = false,
+): string {
+  const bg = isDark ? '#0f172a' : '#ffffff'
+  const textColor = isDark ? '#f8fafc' : '#0F172A'
+  const subColor = isDark ? '#94a3b8' : '#64748B'
+  const routeColor = isDark ? '#cbd5e1' : '#475569'
+  const borderColor = isDark ? '#334155' : '#F1F5F9'
+
+  return `
+    <div style="background:${bg};border-radius:14px;padding:12px 14px;font-family:'Plus Jakarta Sans',sans-serif;min-width:190px;color:${textColor};box-shadow:0 10px 30px rgba(0,0,0,${isDark ? '0.5' : '0.18'});">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;">
+        <span style="font-size:9px;font-weight:700;text-transform:uppercase;color:${isCommuter ? (isDark ? '#93c5fd' : '#1E40AF') : (isDark ? '#d8b4fe' : '#6B21A8')};background:${isCommuter ? (isDark ? '#1e3a8a' : '#EFF6FF') : (isDark ? '#581c87' : '#FAF5FF')};padding:2px 7px;border-radius:999px;border:1px solid ${isCommuter ? (isDark ? '#2563eb' : '#93C5FD') : (isDark ? '#7e22ce' : '#E9D5FF')};">
+          ${isCommuter ? 'Commuter Line' : 'Kereta Jarak Jauh'}
+        </span>
+        <span style="font-size:10px;font-weight:700;color:#10B981;display:flex;align-items:center;gap:3px;">
+          <span style="width:5px;height:5px;border-radius:50%;background:#10B981;"></span>Live
+        </span>
+      </div>
+      <div style="font-size:13px;font-weight:800;color:${textColor};margin-bottom:2px;">
+        ${train.name} <span style="font-size:11px;font-weight:600;color:${subColor};">(${train.code})</span>
+      </div>
+      <div style="font-size:11px;font-weight:600;color:${routeColor};margin-bottom:6px;">
+        ${fromName} → ${toName}
+      </div>
+      <div style="padding-top:6px;border-top:1px solid ${borderColor};font-size:10.5px;color:${subColor};">
+        Stasiun Berikutnya: <strong style="color:${textColor};">${nextStopName}</strong> (${etaNext})
+      </div>
+    </div>
+  `
+}
+
+export default function MapView({
+  activeFilters,
+  onError,
+  onRegisterRetry,
+  onDataLoaded,
+  mapControllerRef,
+  isDark = false,
+}: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstance = useRef<maplibregl.Map | null>(null)
   const stationMarkersRef = useRef<maplibregl.Marker[]>([])
   const trainMarkersRef = useRef<maplibregl.Marker[]>([])
+  const stationMarkersMapRef = useRef<Map<string, { marker: maplibregl.Marker; popup: maplibregl.Popup; station: Station }>>(new Map())
+  const trainMarkersMapRef = useRef<Map<string, { marker: maplibregl.Marker; popup: maplibregl.Popup; train: Train }>>(new Map())
+  const activePopupRef = useRef<maplibregl.Popup | null>(null)
   const routesDataRef = useRef<Route[]>([])
+  const isInitialMount = useRef(true)
 
   const [layerMode, setLayerMode] = useState<MapLayerMode>('streets')
   const [stations, setStations] = useState<Station[]>([])
@@ -280,13 +386,14 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
         setStations(stns)
         setTrains(gapeka)
         routesDataRef.current = routes
+        onDataLoaded?.(stns, gapeka)
 
         const map = mapInstance.current
         if (map) {
           if (map.isStyleLoaded()) {
-            applyRouteLayersToMap(map, routes)
+            applyRouteLayersToMap(map, routes, isDark)
           } else {
-            map.once('style.load', () => applyRouteLayersToMap(map, routes))
+            map.once('style.load', () => applyRouteLayersToMap(map, routes, isDark))
           }
         }
         onError?.(null)
@@ -295,7 +402,7 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
         onError?.(e.message)
       })
       .finally(() => setLoading(false))
-  }, [onError])
+  }, [onError, onDataLoaded, isDark])
 
   // Initial load
   useEffect(() => {
@@ -312,7 +419,7 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
 
     const map = new maplibregl.Map({
       container: mapRef.current,
-      style: buildMapStyle('streets'),
+      style: buildMapStyle(layerMode, isDark),
       center: [106.8272, -6.1751], // Jabodetabek / Jakarta
       zoom: 9.5,
     })
@@ -330,18 +437,24 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
 
   // Switch map layer
   const toggleLayerMode = () => {
-    const next: MapLayerMode = layerMode === 'streets' ? 'satellite' : 'streets'
-    setLayerMode(next)
-    const map = mapInstance.current
-    if (map) {
-      map.setStyle(buildMapStyle(next))
-      map.once('style.load', () => {
-        if (routesDataRef.current.length > 0) {
-          applyRouteLayersToMap(map, routesDataRef.current)
-        }
-      })
-    }
+    setLayerMode((prev) => (prev === 'streets' ? 'satellite' : 'streets'))
   }
+
+  // Update map style when layerMode or isDark changes
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      return
+    }
+    const map = mapInstance.current
+    if (!map) return
+    map.setStyle(buildMapStyle(layerMode, isDark))
+    map.once('style.load', () => {
+      if (routesDataRef.current.length > 0) {
+        applyRouteLayersToMap(map, routesDataRef.current, isDark)
+      }
+    })
+  }, [layerMode, isDark])
 
   // Render station and live train markers
   useEffect(() => {
@@ -352,10 +465,12 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
       // 1. Clear station markers
       stationMarkersRef.current.forEach((m) => m.remove())
       stationMarkersRef.current = []
+      stationMarkersMapRef.current.clear()
 
       // 2. Clear train markers
       trainMarkersRef.current.forEach((m) => m.remove())
       trainMarkersRef.current = []
+      trainMarkersMapRef.current.clear()
 
       // ── Render Stations ──
       if (activeFilters.includes('stasiun')) {
@@ -374,81 +489,22 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
           `
 
           const pinBody = document.createElement('div')
-          pinBody.style.cssText = `
-            width: 26px;
-            height: 26px;
-            background: #EC4899;
-            border-radius: 50% 50% 50% 0;
-            transform: rotate(-45deg);
-            border: 2px solid #ffffff;
-            box-shadow: 0 3px 8px rgba(0,0,0,0.32);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          `
+          pinBody.className = 'station-pin'
 
           const dot = document.createElement('div')
-          dot.style.cssText = `
-            width: 6.5px; height: 6.5px;
-            background: #ffffff;
-            border-radius: 50%;
-            transform: rotate(45deg);
-          `
+          dot.className = 'station-pin-dot'
           pinBody.appendChild(dot)
           pinWrapper.appendChild(pinBody)
 
           const nameLabel = document.createElement('div')
-          nameLabel.style.cssText = `
-            font-size: 8.5px;
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            font-weight: 700;
-            color: #0F172A;
-            background: rgba(255, 255, 255, 0.95);
-            padding: 1px 5px;
-            border-radius: 4px;
-            border: 1px solid rgba(0, 0, 0, 0.08);
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-            margin-top: 2px;
-            white-space: nowrap;
-            max-width: 95px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            user-select: none;
-            pointer-events: none;
-            line-height: 1.2;
-          `
+          nameLabel.className = 'station-name-label'
           nameLabel.textContent = station.name
           pinWrapper.appendChild(nameLabel)
           markerContainer.appendChild(pinWrapper)
 
-          const popup = new maplibregl.Popup({ offset: [0, -28], closeButton: false }).setHTML(`
-            <div style="background:#ffffff; border-radius:12px; padding:10px 12px; font-family:'Plus Jakarta Sans',sans-serif; min-width:160px; color:#1E232C; box-shadow:0 8px 24px rgba(0,0,0,0.12);">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px;">
-                <span style="font-size:9px;font-weight:700;color:#9D174D;background:#FDF2F8;padding:2px 6px;border-radius:999px;border:1px solid #F472B6;">STASIUN</span>
-                <span style="font-size:10px;color:#64748B;font-weight:700;">${station.code}</span>
-              </div>
-              <div style="font-size:13px;font-weight:700;color:#0F172A;">${station.name}</div>
-              <div style="margin-top:6px;padding-top:5px;border-top:1px solid #F1F5F9;font-size:10.5px;color:#64748B;display:flex;flex-direction:column;gap:1.5px;">
-                <div style="display:flex;justify-content:space-between;gap:8px;">
-                  <span>Latitude:</span>
-                  <strong style="color:#0F172A;font-family:monospace;">${station.lat.toFixed(6)}</strong>
-                </div>
-                <div style="display:flex;justify-content:space-between;gap:8px;">
-                  <span>Longitude:</span>
-                  <strong style="color:#0F172A;font-family:monospace;">${station.lng.toFixed(6)}</strong>
-                </div>
-              </div>
-              <a
-                href="https://www.google.com/maps/search/?api=1&query=${station.lat},${station.lng}"
-                target="_blank"
-                rel="noopener noreferrer"
-                style="display:flex;align-items:center;justify-content:center;gap:5px;margin-top:8px;padding:5px 8px;border-radius:8px;background:#EFF6FF;border:1px solid #BFDBFE;color:#1D4ED8;font-size:10.5px;font-weight:700;text-decoration:none;cursor:pointer;"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                <span>Buka di Google Maps</span>
-              </a>
-            </div>
-          `)
+          const popup = new maplibregl.Popup({ offset: [0, -28], closeButton: false }).setHTML(
+            createStationPopupHTML(station, isDark)
+          )
 
           const marker = new maplibregl.Marker({ element: markerContainer, anchor: 'bottom' })
             .setLngLat([station.lng, station.lat])
@@ -456,6 +512,7 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
             .addTo(map)
 
           stationMarkersRef.current.push(marker)
+          stationMarkersMapRef.current.set(station.code.toLowerCase(), { marker, popup, station })
         })
       }
 
@@ -467,7 +524,6 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
 
       liveTrains.forEach(({ train, type, lng, lat, fromName, toName, nextStopName, etaNext }) => {
         const isCommuter = type === 'commuter'
-        const color = isCommuter ? '#3B82F6' : '#9333EA'
         const label = isCommuter ? formatCommuterAcronym(train.name, train.code) : train.name
         const iconSvg = isCommuter ? TRAIN_ICON_SVG : COMPASS_ICON_SVG
 
@@ -477,51 +533,16 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
 
         // Inner badge with hover scaling (does not conflict with MapLibre's transform)
         const badge = document.createElement('div')
-        badge.className = 'train-badge transition-transform duration-200 ease-out hover:scale-115 active:scale-95'
-        badge.style.cssText = `
-          display: flex;
-          align-items: center;
-          gap: 5px;
-          background: ${color};
-          color: #ffffff;
-          padding: 4px 8px;
-          border-radius: 999px;
-          font-family: 'Plus Jakarta Sans', sans-serif;
-          font-size: 10px;
-          font-weight: 700;
-          box-shadow: 0 4px 14px rgba(0,0,0,0.28);
-          border: 1.5px solid #ffffff;
-          white-space: nowrap;
-          pointer-events: auto;
-          user-select: none;
-        `
+        badge.className = `train-badge ${isCommuter ? 'train-badge-commuter' : 'train-badge-jarak-jauh'} transition-transform duration-200 ease-out hover:scale-115 active:scale-95`
         badge.innerHTML = `
           ${iconSvg}
           <span style="max-width:170px;overflow:hidden;text-overflow:ellipsis;">${label}</span>
         `
         container.appendChild(badge)
 
-        const popup = new maplibregl.Popup({ offset: [0, -18], closeButton: false }).setHTML(`
-          <div style="background:#ffffff;border-radius:14px;padding:12px 14px;font-family:'Plus Jakarta Sans',sans-serif;min-width:190px;color:#1E232C;box-shadow:0 10px 30px rgba(0,0,0,0.18);">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;">
-              <span style="font-size:9px;font-weight:700;text-transform:uppercase;color:${isCommuter ? '#1E40AF' : '#6B21A8'};background:${isCommuter ? '#EFF6FF' : '#FAF5FF'};padding:2px 7px;border-radius:999px;border:1px solid ${isCommuter ? '#93C5FD' : '#E9D5FF'};">
-                ${isCommuter ? 'Commuter Line' : 'Kereta Jarak Jauh'}
-              </span>
-              <span style="font-size:10px;font-weight:700;color:#10B981;display:flex;align-items:center;gap:3px;">
-                <span style="width:5px;height:5px;border-radius:50%;background:#10B981;"></span>Live
-              </span>
-            </div>
-            <div style="font-size:13px;font-weight:800;color:#0F172A;margin-bottom:2px;">
-              ${train.name} <span style="font-size:11px;font-weight:600;color:#64748B;">(${train.code})</span>
-            </div>
-            <div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:6px;">
-              ${fromName} → ${toName}
-            </div>
-            <div style="padding-top:6px;border-top:1px solid #F1F5F9;font-size:10.5px;color:#64748B;">
-              Stasiun Berikutnya: <strong style="color:#0F172A;">${nextStopName}</strong> (${etaNext})
-            </div>
-          </div>
-        `)
+        const popup = new maplibregl.Popup({ offset: [0, -18], closeButton: false }).setHTML(
+          createTrainPopupHTML(train, isCommuter, fromName, toName, nextStopName, etaNext, isDark)
+        )
 
         const marker = new maplibregl.Marker({ element: container, anchor: 'center' })
           .setLngLat([lng, lat])
@@ -529,6 +550,8 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
           .addTo(map)
 
         trainMarkersRef.current.push(marker)
+        trainMarkersMapRef.current.set(train.code.toLowerCase(), { marker, popup, train })
+        trainMarkersMapRef.current.set(String(train.id), { marker, popup, train })
       })
     }
 
@@ -541,7 +564,183 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
     // Refresh live train positions every 15 seconds
     const interval = setInterval(renderAllMarkers, 15000)
     return () => clearInterval(interval)
-  }, [stations, trains, activeFilters, layerMode])
+  }, [stations, trains, activeFilters, layerMode, isDark])
+
+  // Center / fly to handlers exposed via mapControllerRef
+  const flyToStation = useCallback((code: string) => {
+    const map = mapInstance.current
+    if (!map) return
+
+    const targetStation = stations.find((s) => s.code.toLowerCase() === code.toLowerCase())
+    if (!targetStation) return
+
+    activePopupRef.current?.remove()
+
+    map.flyTo({
+      center: [targetStation.lng, targetStation.lat],
+      zoom: 15.5,
+      duration: 1500,
+      essential: true,
+    })
+
+    const markerObj = stationMarkersMapRef.current.get(targetStation.code.toLowerCase())
+    if (markerObj) {
+      markerObj.popup.setLngLat([targetStation.lng, targetStation.lat]).addTo(map)
+      activePopupRef.current = markerObj.popup
+    } else {
+      const popup = new maplibregl.Popup({ offset: [0, -28], closeButton: true })
+        .setLngLat([targetStation.lng, targetStation.lat])
+        .setHTML(createStationPopupHTML(targetStation, isDark))
+        .addTo(map)
+      activePopupRef.current = popup
+    }
+  }, [stations, isDark])
+
+  const flyToTrain = useCallback((trainCode: string, trainId?: number, _trainName?: string) => {
+    const map = mapInstance.current
+    if (!map) return
+
+    activePopupRef.current?.remove()
+
+    const targetCode = trainCode.trim().toLowerCase()
+
+    // 1. Check if train is active right now (match by unique ID or Code first!)
+    const liveTrains = getActiveTrains(trains, stations, ['commuter', 'jarak-jauh'])
+    const active = liveTrains.find((t) => {
+      if (trainId !== undefined && t.train.id === trainId) return true
+      if (targetCode && t.train.code.toLowerCase() === targetCode) return true
+      return false
+    })
+
+    if (active) {
+      const markerObj =
+        trainMarkersMapRef.current.get(active.train.code.toLowerCase()) ||
+        trainMarkersMapRef.current.get(String(active.train.id))
+
+      const targetLng = markerObj ? markerObj.marker.getLngLat().lng : active.lng
+      const targetLat = markerObj ? markerObj.marker.getLngLat().lat : active.lat
+
+      map.flyTo({
+        center: [targetLng, targetLat],
+        zoom: 15,
+        duration: 1500,
+        essential: true,
+      })
+
+      if (markerObj) {
+        markerObj.popup.setLngLat([targetLng, targetLat]).addTo(map)
+        activePopupRef.current = markerObj.popup
+      } else {
+        const popup = new maplibregl.Popup({ offset: [0, -18], closeButton: true })
+          .setLngLat([targetLng, targetLat])
+          .setHTML(
+            createTrainPopupHTML(
+              active.train,
+              active.type === 'commuter',
+              active.fromName,
+              active.toName,
+              active.nextStopName,
+              active.etaNext,
+              isDark
+            )
+          )
+          .addTo(map)
+        activePopupRef.current = popup
+      }
+      return
+    }
+
+    // 2. Train not active right now. Match targetTrain by unique ID or Code.
+    const targetTrain = trains.find((t) => {
+      if (trainId !== undefined && t.id === trainId) return true
+      if (targetCode && t.code.toLowerCase() === targetCode) return true
+      return false
+    })
+    if (!targetTrain) return
+
+    const stMap = new Map(stations.map((s) => [s.code, s]))
+    const firstSt = stMap.get(targetTrain.stops?.[0]?.st || targetTrain.from)
+    const lastSt = stMap.get(targetTrain.to)
+
+    if (firstSt) {
+      map.flyTo({
+        center: [firstSt.lng, firstSt.lat],
+        zoom: 14.5,
+        duration: 1500,
+        essential: true,
+      })
+
+      const isCommuter =
+        /commuter|krl|lin|feeder|prameks|bandara/i.test(targetTrain.name) ||
+        /commuter|krl|lin/i.test(targetTrain.code)
+      const color = isCommuter ? '#3B82F6' : '#9333EA'
+
+      const bg = isDark ? '#0f172a' : '#ffffff'
+      const textColor = isDark ? '#f8fafc' : '#0F172A'
+      const subColor = isDark ? '#94a3b8' : '#64748B'
+      const routeColor = isDark ? '#cbd5e1' : '#475569'
+      const borderColor = isDark ? '#334155' : '#F1F5F9'
+      const inactiveBg = isDark ? '#4c0519' : '#FFF1F2'
+      const inactiveText = isDark ? '#fda4af' : '#E11D48'
+
+      const popup = new maplibregl.Popup({ offset: [0, -20], closeButton: true })
+        .setLngLat([firstSt.lng, firstSt.lat])
+        .setHTML(`
+          <div style="background:${bg};border-radius:14px;padding:12px 14px;font-family:'Plus Jakarta Sans',sans-serif;min-width:210px;color:${textColor};box-shadow:0 10px 30px rgba(0,0,0,${isDark ? '0.5' : '0.18'});">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;">
+              <span style="font-size:9px;font-weight:700;text-transform:uppercase;color:${color};background:${isCommuter ? (isDark ? '#1e3a8a' : '#EFF6FF') : (isDark ? '#581c87' : '#FAF5FF')};padding:2px 7px;border-radius:999px;border:1px solid ${color}40;">
+                ${isCommuter ? 'Commuter Line' : 'Kereta Jarak Jauh'}
+              </span>
+              <span style="font-size:10px;font-weight:700;color:${subColor};">
+                KA ${targetTrain.code}
+              </span>
+            </div>
+            <div style="font-size:13px;font-weight:800;color:${textColor};margin-bottom:3px;">
+              ${targetTrain.name}
+            </div>
+            <div style="font-size:11px;font-weight:600;color:${routeColor};margin-bottom:6px;">
+              ${firstSt.name} (${firstSt.code}) → ${lastSt?.name || targetTrain.to} (${lastSt?.code || targetTrain.to})
+            </div>
+            <div style="padding-top:6px;border-top:1px solid ${borderColor};font-size:10.5px;color:${subColor};display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span>Jadwal:</span>
+              <strong style="color:${textColor};">${msToHHMM(targetTrain.dep_ms)} - ${msToHHMM(targetTrain.arr_ms)}</strong>
+            </div>
+            <div style="font-size:9.5px;color:${inactiveText};font-weight:600;background:${inactiveBg};padding:3px 7px;border-radius:6px;margin-top:4px;text-align:center;">
+              Saat ini tidak beroperasi • Menampilkan stasiun awal
+            </div>
+          </div>
+        `)
+        .addTo(map)
+      activePopupRef.current = popup
+    }
+  }, [trains, stations, isDark])
+
+  const flyToCoordinates = useCallback((lng: number, lat: number, zoom = 15) => {
+    mapInstance.current?.flyTo({
+      center: [lng, lat],
+      zoom,
+      duration: 1500,
+      essential: true,
+    })
+  }, [])
+
+  const getCenter = useCallback((): [number, number] | null => {
+    const map = mapInstance.current
+    if (!map) return null
+    const c = map.getCenter()
+    return [c.lng, c.lat]
+  }, [])
+
+  useEffect(() => {
+    if (mapControllerRef) {
+      mapControllerRef.current = {
+        flyToStation,
+        flyToTrain,
+        flyToCoordinates,
+        getCenter,
+      }
+    }
+  }, [mapControllerRef, flyToStation, flyToTrain, flyToCoordinates, getCenter])
 
   return (
     <div className="relative w-full h-full">
@@ -549,10 +748,10 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
 
       {/* Loading overlay */}
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-white/30 backdrop-blur-sm z-10 pointer-events-none">
-          <div className="flex items-center gap-2.5 bg-white rounded-xl px-4 py-2.5 shadow-lg border border-slate-200">
-            <Loader2 size={16} className="animate-spin text-[#4D6BFE]" />
-            <span className="text-sm font-semibold text-slate-700">Memuat data stasiun, rute rel, dan kereta...</span>
+        <div className="absolute inset-0 flex items-center justify-center bg-white/30 dark:bg-slate-950/40 backdrop-blur-sm z-10 pointer-events-none">
+          <div className="flex items-center gap-2.5 bg-white dark:bg-slate-900 rounded-xl px-4 py-2.5 shadow-lg border border-slate-200 dark:border-slate-800">
+            <Loader2 size={16} className="animate-spin text-[#4D6BFE] dark:text-blue-400" />
+            <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Memuat data stasiun, rute rel, dan kereta...</span>
           </div>
         </div>
       )}
@@ -565,16 +764,16 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
           onClick={toggleLayerMode}
           className="
             flex items-center gap-2 px-3 py-2 rounded-xl
-            bg-white/95 backdrop-blur-md border border-slate-200/90
-            shadow-[0_2px_8px_rgba(0,0,0,0.12)] hover:shadow-md hover:bg-white
-            text-slate-800 text-xs font-semibold cursor-pointer transition-all active:scale-95
+            bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-800
+            shadow-[0_2px_8px_rgba(0,0,0,0.12)] hover:shadow-md hover:bg-white dark:hover:bg-slate-800
+            text-slate-800 dark:text-slate-100 text-xs font-semibold cursor-pointer transition-all active:scale-95
           "
         >
-          <div className="w-7 h-7 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-slate-100 flex items-center justify-center">
+          <div className="w-7 h-7 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
             {layerMode === 'streets' ? (
-              <Layers size={14} className="text-[#4D6BFE]" />
+              <Layers size={14} className="text-[#4D6BFE] dark:text-blue-400" />
             ) : (
-              <Globe size={14} className="text-emerald-600" />
+              <Globe size={14} className="text-emerald-600 dark:text-emerald-400" />
             )}
           </div>
           <span>{layerMode === 'streets' ? 'Lapisan: Peta' : 'Lapisan: Satelit'}</span>
