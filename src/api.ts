@@ -1,5 +1,5 @@
 // Base URL for Gapeka 2025 API
-const BASE_URL = 'https://www.gapeka2025.com/api/v1'
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://www.gapeka2025.com/api/v1'
 
 // ─────────────────────────────────────────
 // Types

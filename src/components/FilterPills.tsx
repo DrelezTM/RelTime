@@ -1,4 +1,4 @@
-import { MapPin, Train, Compass, Check } from 'lucide-react'
+import { MapPin, Train, Compass } from 'lucide-react'
 
 export type FilterType = 'stasiun' | 'commuter' | 'jarak-jauh'
 
