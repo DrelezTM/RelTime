@@ -1,8 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
-@custom-variant dark (&:where(.dark, .dark *));
-
 * {
   box-sizing: border-box;
 }
@@ -14,12 +12,6 @@ body {
   overflow: hidden;
   background-color: #f9f8f8;
   color: #0f172a;
-  transition: background-color 0.2s ease, color 0.2s ease;
-}
-
-html.dark, html.dark body {
-  background-color: #0b0f19;
-  color: #f1f5f9;
 }
 
 /* MapLibre GL custom styles */
@@ -34,25 +26,6 @@ html.dark, html.dark body {
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12) !important;
   border: 1px solid rgba(0, 0, 0, 0.08) !important;
   background: #ffffff !important;
-  transition: background 0.2s ease, border-color 0.2s ease;
-}
-
-html.dark .maplibregl-ctrl-group {
-  background: #1e293b !important;
-  border-color: rgba(255, 255, 255, 0.1) !important;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45) !important;
-}
-
-html.dark .maplibregl-ctrl-group button {
-  background-color: transparent !important;
-}
-
-html.dark .maplibregl-ctrl-group button:hover {
-  background-color: #334155 !important;
-}
-
-html.dark .maplibregl-ctrl-icon {
-  filter: invert(1) hue-rotate(180deg);
 }
 
 .maplibregl-ctrl-group button {
@@ -69,8 +42,6 @@ html.dark .maplibregl-ctrl-icon {
 .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
 .sidebar-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
 .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-html.dark .sidebar-scroll::-webkit-scrollbar-thumb { background: #334155; }
-html.dark .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: #475569; }
 
 /* Station marker container (MapLibre positions this) */
 .station-marker-container {
@@ -92,23 +63,12 @@ html.dark .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: #475569; 
   transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-html.dark .station-pin {
-  background: #F43F5E;
-  border-color: #0F172A;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.75), 0 0 10px rgba(244, 63, 94, 0.55);
-}
-
 .station-pin-dot {
   width: 6.5px;
   height: 6.5px;
   background: #ffffff;
   border-radius: 50%;
   transform: rotate(45deg);
-  transition: background-color 0.2s ease;
-}
-
-html.dark .station-pin-dot {
-  background: #FFE4E6;
 }
 
 .station-name-label {
@@ -129,14 +89,6 @@ html.dark .station-pin-dot {
   user-select: none;
   pointer-events: none;
   line-height: 1.2;
-  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
-}
-
-html.dark .station-name-label {
-  color: #F8FAFC;
-  background: rgba(15, 23, 42, 0.94);
-  border-color: rgba(255, 255, 255, 0.18);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
 }
 
 /* Train marker container & badge styles */
@@ -167,25 +119,11 @@ html.dark .station-name-label {
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
 }
 
-html.dark .train-badge-commuter {
-  background: #1D4ED8;
-  color: #DBEAFE;
-  border-color: #0F172A;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7), 0 0 12px rgba(59, 130, 246, 0.45);
-}
-
 .train-badge-jarak-jauh {
   background: #9333EA;
   color: #ffffff;
   border: 1.5px solid #ffffff;
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
-}
-
-html.dark .train-badge-jarak-jauh {
-  background: #7E22CE;
-  color: #FAF5FF;
-  border-color: #0F172A;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7), 0 0 12px rgba(168, 85, 247, 0.45);
 }
 
 /* Custom popup */
@@ -199,10 +137,6 @@ html.dark .train-badge-jarak-jauh {
 
 .maplibregl-popup-tip {
   border-top-color: #ffffff !important;
-}
-
-html.dark .maplibregl-popup-tip {
-  border-top-color: #0f172a !important;
 }
 
 /* Scale indicator (clean text-only without box or background) */
@@ -223,11 +157,6 @@ html.dark .maplibregl-popup-tip {
   text-align: right !important;
 }
 
-html.dark .maplibregl-ctrl-scale {
-  color: #cbd5e1 !important;
-  text-shadow: -1px -1px 0 #0f172a, 1px -1px 0 #0f172a, -1px 1px 0 #0f172a, 1px 1px 0 #0f172a, 0 1px 4px rgba(0, 0, 0, 0.6) !important;
-}
-
 /* Mobile: elevate bottom-right map controls so they don't collide with navigation / bottom bar */
 @media (max-width: 640px) {
   .maplibregl-ctrl-bottom-right {
@@ -235,4 +164,3 @@ html.dark .maplibregl-ctrl-scale {
     right: 12px !important;
   }
 }
-

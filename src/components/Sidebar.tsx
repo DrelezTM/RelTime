@@ -1,22 +1,18 @@
 import { useState, useEffect, Component, type ReactNode, type ErrorInfo } from 'react'
 import {
   Map as MapIcon, Clock, Train, Compass, X, ArrowRight, Loader2, RefreshCw,
-  Sun, Moon, Laptop,
 } from 'lucide-react'
 import {
   fetchGapeka, fetchStations, clearApiCache,
   msToHHMM, msToDuration, nowMs,
   type Train as TrainEntry, type Station,
 } from '../api'
-import type { ThemeMode } from '../theme'
 
 type SidebarTab = 'maps' | 'jadwal' | 'kereta'
 
 interface SidebarProps {
   isOpen: boolean
   onClose: () => void
-  theme?: ThemeMode
-  onThemeChange?: (theme: ThemeMode) => void
 }
 
 type TrainData = TrainEntry
@@ -432,8 +428,8 @@ const KeretaPanel = ({ trains, stations, loading, error, onRefresh }: KeretaPane
 }
 
 // ── Main Sidebar export ──────────────────────────────────────────
-export default function Sidebar({ isOpen, onClose, theme = 'system', onThemeChange }: SidebarProps) {
-  const [activeTab, setActiveTab] = useState<SidebarTab>('jadwal')
+export default function Sidebar({ isOpen, onClose }: SidebarProps) {
+  const [activeTab, setActiveTab] = useState<SidebarTab>('maps')
   const [trains, setTrains] = useState<TrainData[]>([])
   const [stations, setStations] = useState<Station[]>([])
   const [loading, setLoading] = useState(false)
@@ -447,8 +443,8 @@ export default function Sidebar({ isOpen, onClose, theme = 'system', onThemeChan
     return () => clearInterval(timer)
   }, [])
 
-  const loadData = () => {
-    clearApiCache()
+  const loadData = (force = false) => {
+    if (force) clearApiCache()
     setLoading(true)
     setError(null)
     Promise.all([fetchGapeka(), fetchStations()])
@@ -464,7 +460,7 @@ export default function Sidebar({ isOpen, onClose, theme = 'system', onThemeChan
   // Load when sidebar opens for the first time
   useEffect(() => {
     if (isOpen && trains.length === 0 && !loading) {
-      loadData()
+      loadData(false)
     }
   }, [isOpen])
 
@@ -510,7 +506,7 @@ export default function Sidebar({ isOpen, onClose, theme = 'system', onThemeChan
           </div>
           <div className="flex items-center gap-1">
             <button
-              onClick={loadData}
+              onClick={() => loadData(true)}
               title={
                 lastRefresh
                   ? `Terakhir diperbarui: ${lastRefresh.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\./g, ':')}`
@@ -527,54 +523,6 @@ export default function Sidebar({ isOpen, onClose, theme = 'system', onThemeChan
               aria-label="Tutup sidebar"
             >
               <X size={18} />
-            </button>
-          </div>
-        </div>
-
-        {/* Theme mode segmented selector: Sistem | Mode Terang | Mode Gelap */}
-        <div className="px-4 py-2.5 bg-slate-50/80 dark:bg-slate-950/60 border-b border-slate-200/80 dark:border-slate-800 shrink-0">
-          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5">
-            <span>Tema Tampilan</span>
-            <span className="text-[10px] text-[#4D6BFE] dark:text-blue-400 uppercase tracking-wider font-mono font-bold">
-              {theme === 'light' ? 'Mode Terang' : theme === 'dark' ? 'Mode Gelap' : 'Sistem (Auto)'}
-            </span>
-          </div>
-          <div className="grid grid-cols-3 gap-1 bg-slate-200/70 dark:bg-slate-800/80 p-1 rounded-xl">
-            <button
-              type="button"
-              onClick={() => onThemeChange?.('system')}
-              className={`flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                theme === 'system'
-                  ? 'bg-white dark:bg-slate-900 text-[#4D6BFE] dark:text-blue-400 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              <Laptop size={13} />
-              <span>Sistem</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onThemeChange?.('light')}
-              className={`flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                theme === 'light'
-                  ? 'bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-400 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              <Sun size={13} />
-              <span>Terang</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onThemeChange?.('dark')}
-              className={`flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                theme === 'dark'
-                  ? 'bg-white dark:bg-slate-900 text-blue-500 dark:text-blue-400 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              <Moon size={13} />
-              <span>Gelap</span>
             </button>
           </div>
         </div>

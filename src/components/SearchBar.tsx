@@ -1,7 +1,6 @@
-import { Search, X, Menu, MapPin, Train, Compass, Navigation, Sun, Moon, Laptop, Check } from 'lucide-react'
+import { Search, X, Menu, MapPin, Train, Compass, Navigation } from 'lucide-react'
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { nowMs, type Station, type Train as TrainType } from '../api'
-import type { ThemeMode } from '../theme'
 
 export type RecommendationType = 'stasiun' | 'commuter' | 'jarak-jauh'
 
@@ -46,8 +45,6 @@ interface SearchBarProps {
   trains?: TrainType[]
   onSelectRecommendation?: (item: RecommendationItem) => void
   getMapCenter?: () => [number, number] | null
-  theme?: ThemeMode
-  onThemeChange?: (theme: ThemeMode) => void
 }
 
 function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -80,12 +77,9 @@ export default function SearchBar({
   trains = [],
   onSelectRecommendation,
   getMapCenter,
-  theme = 'system',
-  onThemeChange,
 }: SearchBarProps) {
   const [focused, setFocused] = useState(false)
   const [isOpen, setIsOpen] = useState(false)
-  const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null)
 
@@ -110,7 +104,6 @@ export default function SearchBar({
     function handleClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsOpen(false)
-        setThemeMenuOpen(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -325,7 +318,7 @@ export default function SearchBar({
       return b.score - a.score
     })
 
-    return items.slice(0, 5)
+    return items
   }, [value, stations, trains, userCoords, getMapCenter])
 
   const handleSelect = (item: RecommendationItem) => {
@@ -394,18 +387,16 @@ export default function SearchBar({
           onChange={(e) => {
             onChange(e.target.value)
             setIsOpen(true)
-            setThemeMenuOpen(false)
             setSelectedIndex(-1)
           }}
           onFocus={() => {
             setFocused(true)
-            setThemeMenuOpen(false)
             if (value.trim().length > 0) setIsOpen(true)
           }}
           onBlur={() => setFocused(false)}
           onKeyDown={handleKeyDown}
           placeholder="Cari stasiun, commuterline, atau kereta jarak jauh"
-          className="flex-1 bg-transparent text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 text-sm outline-none font-medium min-w-0"
+          className="flex-1 bg-transparent text-slate-800 placeholder-slate-400 text-sm outline-none font-medium min-w-0"
         />
 
         {/* Clear Button (when value exists) */}
@@ -417,7 +408,7 @@ export default function SearchBar({
               inputRef.current?.focus()
             }}
             type="button"
-            className="shrink-0 p-1 rounded-full text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            className="shrink-0 p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
             aria-label="Hapus pencarian"
           >
             <X size={15} />
@@ -425,7 +416,7 @@ export default function SearchBar({
         )}
 
         {/* Vertical Divider */}
-        <div className="w-px h-5 bg-slate-200 dark:bg-slate-800 shrink-0" />
+        <div className="w-px h-5 bg-slate-200 shrink-0" />
 
         {/* Search Icon / Submit Button */}
         <button
@@ -437,134 +428,25 @@ export default function SearchBar({
           }}
           className="
             flex items-center justify-center w-8 h-8 rounded-full
-            text-slate-500 dark:text-slate-400 hover:text-[#4D6BFE] dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-slate-800
+            text-slate-500 hover:text-[#4D6BFE] hover:bg-blue-50
             transition-colors shrink-0 cursor-pointer
           "
           aria-label="Cari"
         >
           <Search size={17} />
         </button>
-
-        {/* Theme Selector (system, lightmode, darkmode) */}
-        <div className="relative shrink-0">
-          <button
-            onClick={() => {
-              setThemeMenuOpen((prev) => !prev)
-              setIsOpen(false)
-            }}
-            type="button"
-            title={`Tema: ${theme === 'light' ? 'Mode Terang' : theme === 'dark' ? 'Mode Gelap' : 'Sistem (Otomatis)'}`}
-            className="
-              flex items-center justify-center w-8 h-8 rounded-full
-              text-slate-600 dark:text-slate-300
-              hover:text-slate-900 dark:hover:text-white
-              hover:bg-slate-100 dark:hover:bg-slate-800
-              bg-slate-50 dark:bg-slate-800/60
-              border border-slate-200/80 dark:border-slate-700/80
-              transition-colors shrink-0 cursor-pointer
-            "
-            aria-label="Pilih Tema"
-            aria-expanded={themeMenuOpen}
-          >
-            {theme === 'light' ? (
-              <Sun size={15} className="text-amber-500" />
-            ) : theme === 'dark' ? (
-              <Moon size={15} className="text-blue-400" />
-            ) : (
-              <Laptop size={15} className="text-slate-500 dark:text-slate-400" />
-            )}
-          </button>
-
-          {/* Theme Dropdown Menu */}
-          {themeMenuOpen && (
-            <div className="
-              absolute right-0 top-full mt-2 w-44
-              bg-white/95 dark:bg-slate-900/95 backdrop-blur-md
-              rounded-2xl border border-slate-200/90 dark:border-slate-800
-              shadow-[0_12px_36px_rgba(0,0,0,0.18)] p-1.5 z-50
-              animate-in fade-in slide-in-from-top-1 duration-150
-            ">
-              <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                Tema Tampilan
-              </div>
-
-              {/* System Option */}
-              <button
-                type="button"
-                onClick={() => {
-                  onThemeChange?.('system')
-                  setThemeMenuOpen(false)
-                }}
-                className={`
-                  w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold
-                  transition-colors cursor-pointer
-                  ${theme === 'system'
-                    ? 'bg-blue-50 dark:bg-blue-950/50 text-[#3048C7] dark:text-blue-400'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }
-                `}
-              >
-                <Laptop size={14} className={theme === 'system' ? 'text-[#4D6BFE]' : 'text-slate-400 dark:text-slate-500'} />
-                <span className="flex-1 text-left">Sistem</span>
-                {theme === 'system' && <Check size={13} className="text-[#4D6BFE]" />}
-              </button>
-
-              {/* Light Option */}
-              <button
-                type="button"
-                onClick={() => {
-                  onThemeChange?.('light')
-                  setThemeMenuOpen(false)
-                }}
-                className={`
-                  w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold
-                  transition-colors cursor-pointer
-                  ${theme === 'light'
-                    ? 'bg-amber-50 dark:bg-amber-950/50 text-amber-900 dark:text-amber-300'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }
-                `}
-              >
-                <Sun size={14} className={theme === 'light' ? 'text-amber-500' : 'text-slate-400 dark:text-slate-500'} />
-                <span className="flex-1 text-left">Mode Terang</span>
-                {theme === 'light' && <Check size={13} className="text-amber-600" />}
-              </button>
-
-              {/* Dark Option */}
-              <button
-                type="button"
-                onClick={() => {
-                  onThemeChange?.('dark')
-                  setThemeMenuOpen(false)
-                }}
-                className={`
-                  w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold
-                  transition-colors cursor-pointer
-                  ${theme === 'dark'
-                    ? 'bg-blue-50 dark:bg-blue-950/50 text-[#3048C7] dark:text-blue-400'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }
-                `}
-              >
-                <Moon size={14} className={theme === 'dark' ? 'text-blue-400' : 'text-slate-400 dark:text-slate-500'} />
-                <span className="flex-1 text-left">Mode Gelap</span>
-                {theme === 'dark' && <Check size={13} className="text-blue-400" />}
-              </button>
-            </div>
-          )}
-        </div>
       </div>
 
-      {/* Dropdown Recommendations (Max 5 results) */}
+      {/* Dropdown Recommendations (All results) */}
       {isOpen && value.trim().length > 0 && (
-        <div className="absolute top-full left-0 right-0 mt-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-[0_12px_36px_rgba(0,0,0,0.16)] overflow-hidden z-50 divide-y divide-slate-100 dark:divide-slate-800 animate-in fade-in slide-in-from-top-1 duration-150">
-          <div className="px-3.5 py-2 bg-slate-50/90 dark:bg-slate-800/90 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center justify-between border-b border-slate-100 dark:border-slate-800">
+        <div className="absolute top-full left-0 right-0 mt-2 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/90 shadow-[0_12px_36px_rgba(0,0,0,0.16)] overflow-hidden z-50 divide-y divide-slate-100 animate-in fade-in slide-in-from-top-1 duration-150">
+          <div className="px-3.5 py-2 bg-slate-50/90 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between border-b border-slate-100 shrink-0">
             <span>Rekomendasi</span>
-            <span className="text-[#4D6BFE] dark:text-blue-400 font-mono">{recommendations.length} hasil</span>
+            <span className="text-[#4D6BFE] font-mono font-bold">{recommendations.length} hasil</span>
           </div>
 
           {recommendations.length > 0 ? (
-            <div className="py-1">
+            <div className="py-1 max-h-[380px] sm:max-h-[440px] overflow-y-auto sidebar-scroll">
               {recommendations.map((item, idx) => {
                 const isSelected = selectedIndex === idx
                 const isStation = item.type === 'stasiun'
@@ -579,17 +461,19 @@ export default function SearchBar({
                       handleSelect(item)
                     }}
                     onMouseEnter={() => setSelectedIndex(idx)}
-                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-left transition-colors cursor-pointer ${isSelected ? 'bg-[#EEF3FF] dark:bg-slate-800' : 'hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                      }`}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-left transition-colors cursor-pointer ${
+                      isSelected ? 'bg-[#EEF3FF]' : 'hover:bg-slate-50'
+                    }`}
                   >
                     {/* Icon container */}
                     <div
-                      className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${isStation
-                        ? 'bg-pink-50 dark:bg-pink-950/60 text-pink-600 dark:text-pink-300 border-pink-200/70 dark:border-pink-800/70'
-                        : isCommuter
-                          ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-300 border-blue-200/70 dark:border-blue-800/70'
-                          : 'bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-300 border-purple-200/70 dark:border-purple-800/70'
-                        }`}
+                      className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
+                        isStation
+                          ? 'bg-pink-50 text-pink-600 border-pink-200/70'
+                          : isCommuter
+                            ? 'bg-blue-50 text-blue-600 border-blue-200/70'
+                            : 'bg-purple-50 text-purple-600 border-purple-200/70'
+                      }`}
                     >
                       {isStation ? (
                         <MapPin size={16} />
@@ -603,26 +487,27 @@ export default function SearchBar({
                     {/* Text info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
+                        <span className="text-sm font-bold text-slate-800 truncate">
                           {item.title}
                         </span>
                         <span
-                          className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md shrink-0 border ${isStation
-                            ? 'bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 border-pink-200 dark:border-pink-800'
-                            : isCommuter
-                              ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
-                              : 'bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
-                            }`}
+                          className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md shrink-0 border ${
+                            isStation
+                              ? 'bg-pink-50 text-pink-700 border-pink-200'
+                              : isCommuter
+                                ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                : 'bg-purple-50 text-purple-700 border-purple-200'
+                          }`}
                         >
                           {isStation ? 'Stasiun' : isCommuter ? 'Commuter' : 'Jarak Jauh'}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">{item.subtitle}</p>
+                      <p className="text-xs text-slate-500 truncate mt-0.5">{item.subtitle}</p>
                     </div>
 
                     {/* Distance chip */}
                     {item.distanceKm !== undefined && (
-                      <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300 bg-slate-100/90 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 px-2 py-0.5 rounded-full shrink-0">
+                      <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-600 bg-slate-100/90 border border-slate-200/80 px-2 py-0.5 rounded-full shrink-0">
                         <Navigation size={10} className="text-slate-400 rotate-45" />
                         <span>{formatDistance(item.distanceKm)}</span>
                       </div>
@@ -632,7 +517,7 @@ export default function SearchBar({
               })}
             </div>
           ) : (
-            <div className="px-4 py-6 text-center text-xs text-slate-400 dark:text-slate-500">
+            <div className="px-4 py-6 text-center text-xs text-slate-400">
               Tidak ada stasiun atau kereta yang cocok dengan &quot;{value}&quot;
             </div>
           )}

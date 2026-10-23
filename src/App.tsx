@@ -5,13 +5,6 @@ import FilterPills, { type FilterType } from './components/FilterPills'
 import MapView, { type MapController } from './components/MapView'
 import Sidebar from './components/Sidebar'
 import type { Station, Train } from './api'
-import {
-  type ThemeMode,
-  getStoredTheme,
-  setStoredTheme,
-  resolveEffectiveTheme,
-} from './theme'
-
 export default function App() {
   const [search, setSearch] = useState('')
   const [activeFilters, setActiveFilters] = useState<FilterType[]>(['stasiun', 'commuter', 'jarak-jauh'])
@@ -20,50 +13,15 @@ export default function App() {
   const [stations, setStations] = useState<Station[]>([])
   const [trains, setTrains] = useState<Train[]>([])
 
-  // Theme management: 'system' | 'light' | 'dark'
-  const [theme, setTheme] = useState<ThemeMode>(getStoredTheme)
-  const [effectiveTheme, setEffectiveTheme] = useState<'light' | 'dark'>(() =>
-    resolveEffectiveTheme(getStoredTheme())
-  )
-
-  const handleThemeChange = useCallback((newTheme: ThemeMode) => {
-    setTheme(newTheme)
-    setStoredTheme(newTheme)
-    const effective = resolveEffectiveTheme(newTheme)
-    setEffectiveTheme(effective)
-    if (effective === 'dark') {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
+  // Ensure application is strictly in light mode
+  useEffect(() => {
+    document.documentElement.classList.remove('dark')
+    try {
+      localStorage.removeItem('reltime_theme_mode')
+    } catch {
+      // ignore
     }
   }, [])
-
-  useEffect(() => {
-    // Initial sync of dark class on <html>
-    const effective = resolveEffectiveTheme(theme)
-    setEffectiveTheme(effective)
-    if (effective === 'dark') {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-    }
-
-    if (theme !== 'system') return
-
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    const listener = () => {
-      const updated = resolveEffectiveTheme('system')
-      setEffectiveTheme(updated)
-      if (updated === 'dark') {
-        document.documentElement.classList.add('dark')
-      } else {
-        document.documentElement.classList.remove('dark')
-      }
-    }
-
-    mediaQuery.addEventListener('change', listener)
-    return () => mediaQuery.removeEventListener('change', listener)
-  }, [theme])
 
   const retryRef = useRef<(() => void) | null>(null)
   const mapControllerRef = useRef<MapController | null>(null)
@@ -100,7 +58,7 @@ export default function App() {
   }, [])
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#F9F8F8] dark:bg-[#0b0f19]">
+    <div className="relative w-screen h-screen overflow-hidden bg-[#F9F8F8]">
       {/* ── Full-screen Map ── */}
       <div className="absolute inset-0 z-0">
         <MapView
@@ -109,14 +67,13 @@ export default function App() {
           onRegisterRetry={handleRegisterRetry}
           onDataLoaded={handleDataLoaded}
           mapControllerRef={mapControllerRef}
-          isDark={effectiveTheme === 'dark'}
         />
       </div>
 
       {/* ── Top overlay: Google Maps-style SearchBar + Filter Pills + Error ── */}
       <header className="absolute top-0 left-0 right-0 z-10 pointer-events-none p-3 sm:p-4 flex flex-col items-center gap-2.5">
         <div className="flex flex-col md:flex-row md:items-center gap-2.5 w-full">
-          {/* SearchBar with integrated hamburger menu and theme toggle */}
+          {/* SearchBar with integrated hamburger menu */}
           <div className="pointer-events-auto w-full md:w-[380px] shrink-0">
             <SearchBar
               value={search}
@@ -126,8 +83,6 @@ export default function App() {
               trains={trains}
               onSelectRecommendation={handleSelectRecommendation}
               getMapCenter={getMapCenter}
-              theme={theme}
-              onThemeChange={handleThemeChange}
             />
           </div>
 
@@ -143,7 +98,7 @@ export default function App() {
         {/* Error message banner */}
         {error && (
           <div className="pointer-events-auto max-w-lg w-full sm:w-auto animate-in fade-in slide-in-from-top-2 duration-200">
-            <div className="flex items-center gap-2.5 bg-red-50/95 dark:bg-red-950/90 backdrop-blur-md border border-red-200/90 dark:border-red-900/80 rounded-2xl px-4 py-2.5 shadow-[0_8px_30px_rgb(0,0,0,0.12)] text-xs text-red-800 dark:text-red-200 font-medium">
+            <div className="flex items-center gap-2.5 bg-red-50/95 backdrop-blur-md border border-red-200/90 rounded-2xl px-4 py-2.5 shadow-[0_8px_30px_rgb(0,0,0,0.12)] text-xs text-red-800 font-medium">
               <AlertCircle size={16} className="text-red-500 shrink-0" />
               <span className="truncate">Gagal memuat data: {error}</span>
               <button
@@ -152,14 +107,14 @@ export default function App() {
                   setError(null)
                   retryRef.current?.()
                 }}
-                className="ml-2 px-2.5 py-1 rounded-lg bg-red-100 dark:bg-red-900/60 hover:bg-red-200 dark:hover:bg-red-800/80 text-red-700 dark:text-red-300 font-semibold transition-colors cursor-pointer shrink-0"
+                className="ml-2 px-2.5 py-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-700 font-semibold transition-colors cursor-pointer shrink-0"
               >
                 Coba Lagi
               </button>
               <button
                 type="button"
                 onClick={() => setError(null)}
-                className="p-1 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors cursor-pointer shrink-0"
+                className="p-1 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-100 transition-colors cursor-pointer shrink-0"
                 aria-label="Tutup"
               >
                 <X size={14} />
@@ -173,8 +128,6 @@ export default function App() {
       <Sidebar
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        theme={theme}
-        onThemeChange={handleThemeChange}
       />
     </div>
   )
