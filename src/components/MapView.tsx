@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { Layers, Loader2, Navigation } from 'lucide-react'
+import { Layers, Loader2, Globe } from 'lucide-react'
 import {
   fetchStations, fetchRoutes, fetchGapeka, clearApiCache,
   nowMs, msToDuration,
@@ -139,6 +139,37 @@ interface ActiveTrainData {
   etaNext: string
 }
 
+function formatCommuterAcronym(name?: string, code?: string): string {
+  const trainCode = code?.trim() || ''
+  let cleanName = (name || '').replace(/\s*\([^)]*\)\s*$/, '').trim()
+
+  if (!cleanName) {
+    return trainCode ? `CL (${trainCode})` : 'CL'
+  }
+
+  // Normalize common prefixes to "Commuter Line"
+  if (/^krl\s+/i.test(cleanName)) {
+    cleanName = cleanName.replace(/^krl\s+/i, 'Commuter Line ')
+  } else if (/^lin\s+/i.test(cleanName)) {
+    cleanName = cleanName.replace(/^lin\s+/i, 'Commuter Line ')
+  } else if (!/^commuter\s+line/i.test(cleanName) && !/^cl\b/i.test(cleanName)) {
+    cleanName = `Commuter Line ${cleanName}`
+  }
+
+  const words = cleanName.split(/[\s\-–—/]+/).filter(Boolean)
+  let acronym = ''
+
+  for (const word of words) {
+    if (word.toUpperCase() === 'CL') {
+      acronym += 'CL'
+    } else {
+      acronym += word[0].toUpperCase()
+    }
+  }
+
+  return trainCode ? `${acronym} (${trainCode})` : acronym
+}
+
 function getActiveTrains(
   trains: Train[],
   stations: Station[],
@@ -238,7 +269,6 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
   const [stations, setStations] = useState<Station[]>([])
   const [trains, setTrains] = useState<Train[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTrainCount, setActiveTrainCount] = useState(0)
 
   const loadData = useCallback(() => {
     clearApiCache()
@@ -345,13 +375,13 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
 
           const pinBody = document.createElement('div')
           pinBody.style.cssText = `
-            width: 20px;
-            height: 20px;
-            background: #0891B2;
+            width: 26px;
+            height: 26px;
+            background: #EC4899;
             border-radius: 50% 50% 50% 0;
             transform: rotate(-45deg);
             border: 2px solid #ffffff;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            box-shadow: 0 3px 8px rgba(0,0,0,0.32);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -359,22 +389,64 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
 
           const dot = document.createElement('div')
           dot.style.cssText = `
-            width: 5px; height: 5px;
+            width: 6.5px; height: 6.5px;
             background: #ffffff;
             border-radius: 50%;
             transform: rotate(45deg);
           `
           pinBody.appendChild(dot)
           pinWrapper.appendChild(pinBody)
+
+          const nameLabel = document.createElement('div')
+          nameLabel.style.cssText = `
+            font-size: 8.5px;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-weight: 700;
+            color: #0F172A;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 1px 5px;
+            border-radius: 4px;
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+            margin-top: 2px;
+            white-space: nowrap;
+            max-width: 95px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            user-select: none;
+            pointer-events: none;
+            line-height: 1.2;
+          `
+          nameLabel.textContent = station.name
+          pinWrapper.appendChild(nameLabel)
           markerContainer.appendChild(pinWrapper)
 
-          const popup = new maplibregl.Popup({ offset: [0, -22], closeButton: false }).setHTML(`
-            <div style="background:#ffffff; border-radius:12px; padding:10px 12px; font-family:'Plus Jakarta Sans',sans-serif; min-width:140px; color:#1E232C; box-shadow:0 8px 24px rgba(0,0,0,0.12);">
+          const popup = new maplibregl.Popup({ offset: [0, -28], closeButton: false }).setHTML(`
+            <div style="background:#ffffff; border-radius:12px; padding:10px 12px; font-family:'Plus Jakarta Sans',sans-serif; min-width:160px; color:#1E232C; box-shadow:0 8px 24px rgba(0,0,0,0.12);">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px;">
-                <span style="font-size:9px;font-weight:700;color:#0E7490;background:#ECFEFF;padding:2px 6px;border-radius:999px;border:1px solid #06B6D4;">STASIUN</span>
+                <span style="font-size:9px;font-weight:700;color:#9D174D;background:#FDF2F8;padding:2px 6px;border-radius:999px;border:1px solid #F472B6;">STASIUN</span>
                 <span style="font-size:10px;color:#64748B;font-weight:700;">${station.code}</span>
               </div>
               <div style="font-size:13px;font-weight:700;color:#0F172A;">${station.name}</div>
+              <div style="margin-top:6px;padding-top:5px;border-top:1px solid #F1F5F9;font-size:10.5px;color:#64748B;display:flex;flex-direction:column;gap:1.5px;">
+                <div style="display:flex;justify-content:space-between;gap:8px;">
+                  <span>Latitude:</span>
+                  <strong style="color:#0F172A;font-family:monospace;">${station.lat.toFixed(6)}</strong>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:8px;">
+                  <span>Longitude:</span>
+                  <strong style="color:#0F172A;font-family:monospace;">${station.lng.toFixed(6)}</strong>
+                </div>
+              </div>
+              <a
+                href="https://www.google.com/maps/search/?api=1&query=${station.lat},${station.lng}"
+                target="_blank"
+                rel="noopener noreferrer"
+                style="display:flex;align-items:center;justify-content:center;gap:5px;margin-top:8px;padding:5px 8px;border-radius:8px;background:#EFF6FF;border:1px solid #BFDBFE;color:#1D4ED8;font-size:10.5px;font-weight:700;text-decoration:none;cursor:pointer;"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                <span>Buka di Google Maps</span>
+              </a>
             </div>
           `)
 
@@ -389,12 +461,15 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
 
       // ── Render Live Trains ──
       const liveTrains = getActiveTrains(trains, stations, activeFilters)
-      setActiveTrainCount(liveTrains.length)
+
+      const TRAIN_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><rect width="16" height="16" x="4" y="3" rx="2"/><path d="M4 11h16"/><path d="M12 3v8"/><path d="m8 19-2 3"/><path d="m18 22-2-3"/><path d="M8 15h0"/><path d="M16 15h0"/></svg>`
+      const COMPASS_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>`
 
       liveTrains.forEach(({ train, type, lng, lat, fromName, toName, nextStopName, etaNext }) => {
         const isCommuter = type === 'commuter'
         const color = isCommuter ? '#3B82F6' : '#9333EA'
-        const label = isCommuter ? (train.code || 'Commuter') : train.name
+        const label = isCommuter ? formatCommuterAcronym(train.name, train.code) : train.name
+        const iconSvg = isCommuter ? TRAIN_ICON_SVG : COMPASS_ICON_SVG
 
         // Outer container for MapLibre positioning (MapLibre sets style.transform here)
         const container = document.createElement('div')
@@ -421,8 +496,8 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
           user-select: none;
         `
         badge.innerHTML = `
-          <span style="width:6px;height:6px;border-radius:50%;background:#10B981;box-shadow:0 0 6px #10B981;flex-shrink:0;"></span>
-          <span style="max-width:110px;overflow:hidden;text-overflow:ellipsis;">${label}</span>
+          ${iconSvg}
+          <span style="max-width:170px;overflow:hidden;text-overflow:ellipsis;">${label}</span>
         `
         container.appendChild(badge)
 
@@ -468,15 +543,6 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
     return () => clearInterval(interval)
   }, [stations, trains, activeFilters, layerMode])
 
-  // Center on Jakarta button helper
-  const handleCenterJakarta = () => {
-    mapInstance.current?.flyTo({
-      center: [106.8272, -6.1751],
-      zoom: 11,
-      essential: true,
-    })
-  }
-
   return (
     <div className="relative w-full h-full">
       <div ref={mapRef} className="w-full h-full" />
@@ -491,26 +557,8 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
         </div>
       )}
 
-      {/* Floating status badges (top right) */}
-      {!loading && (
-        <div className="absolute top-4 right-4 z-10 flex flex-col gap-1.5 items-end">
-          {stations.length > 0 && activeFilters.includes('stasiun') && (
-            <div className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl px-3 py-1.5 shadow text-xs font-semibold text-slate-700 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[#0891B2]" />
-              {stations.length} Stasiun
-            </div>
-          )}
-          {activeTrainCount > 0 && (activeFilters.includes('commuter') || activeFilters.includes('jarak-jauh')) && (
-            <div className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl px-3 py-1.5 shadow text-xs font-semibold text-slate-700 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              {activeTrainCount} Kereta Berjalan
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Controls (bottom left) */}
-      <div className="absolute bottom-6 left-4 z-10 flex items-center gap-2">
+      {/* Controls (bottom left) - raised higher on mobile */}
+      <div className="absolute bottom-14 sm:bottom-6 left-4 z-10 flex items-center gap-2">
         {/* Layer switcher */}
         <button
           type="button"
@@ -522,26 +570,14 @@ export default function MapView({ activeFilters, onError, onRegisterRetry }: Map
             text-slate-800 text-xs font-semibold cursor-pointer transition-all active:scale-95
           "
         >
-          <div className="w-7 h-7 rounded-lg overflow-hidden border border-slate-300 shrink-0 bg-slate-200 flex items-center justify-center">
-            {layerMode === 'streets'
-              ? <span className="text-[9px] font-bold text-slate-600">SAT</span>
-              : <Layers size={13} className="text-[#4D6BFE]" />}
+          <div className="w-7 h-7 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-slate-100 flex items-center justify-center">
+            {layerMode === 'streets' ? (
+              <Layers size={14} className="text-[#4D6BFE]" />
+            ) : (
+              <Globe size={14} className="text-emerald-600" />
+            )}
           </div>
           <span>{layerMode === 'streets' ? 'Lapisan: Peta' : 'Lapisan: Satelit'}</span>
-        </button>
-
-        {/* Center to Jabodetabek button */}
-        <button
-          type="button"
-          onClick={handleCenterJakarta}
-          title="Fokus ke Jabodetabek"
-          className="
-            p-2.5 rounded-xl bg-white/95 backdrop-blur-md border border-slate-200/90
-            shadow-[0_2px_8px_rgba(0,0,0,0.12)] hover:shadow-md hover:bg-white
-            text-slate-700 hover:text-[#4D6BFE] transition-all active:scale-95 cursor-pointer
-          "
-        >
-          <Navigation size={15} />
         </button>
       </div>
     </div>

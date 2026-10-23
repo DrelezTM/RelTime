@@ -1,5 +1,5 @@
 import { useState, useEffect, Component, type ReactNode, type ErrorInfo } from 'react'
-import { Map as MapIcon, Clock, Train, X, ArrowRight, Loader2, RefreshCw } from 'lucide-react'
+import { Map as MapIcon, Clock, Train, Compass, X, ArrowRight, Loader2, RefreshCw } from 'lucide-react'
 import {
   fetchGapeka, fetchStations, clearApiCache,
   msToHHMM, msToDuration, nowMs,
@@ -63,53 +63,118 @@ class PanelErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryStat
 // ── Maps info panel ──────────────────────────────────────────────
 interface MiniMapPanelProps {
   stationCount: number
+  trains: TrainData[]
   loading: boolean
 }
 
-const MiniMapPanel = ({ stationCount, loading }: MiniMapPanelProps) => (
-  <div className="space-y-4">
-    <div className="rounded-2xl border border-slate-200/90 bg-[#EEF3FF] p-4 text-center">
-      <div className="w-10 h-10 rounded-xl bg-white shadow-sm flex items-center justify-center mx-auto mb-2.5 text-[#4D6BFE]">
-        <MapIcon size={20} />
-      </div>
-      <h3 className="text-sm font-bold text-slate-800">Peta Rel Indonesia</h3>
-      <p className="text-xs text-slate-500 mt-1">
-        Data stasiun dan jalur rel diambil langsung dari{' '}
-        <span className="font-semibold text-[#4D6BFE]">Gapeka 2025</span>.
-        Klik pin stasiun untuk melihat detailnya.
-      </p>
-    </div>
+const MiniMapPanel = ({ stationCount, trains, loading }: MiniMapPanelProps) => {
+  const isCommuter = (t: TrainData) =>
+    /commuter|krl|lin|feeder|prameks|bandara/i.test(t.name) || /commuter|krl|lin/i.test(t.code)
 
-    <div className="grid grid-cols-2 gap-2">
-      <div className="rounded-xl p-3 bg-[#EEF3FF] border border-[#DCE4FF] text-center">
-        {loading ? (
-          <Loader2 size={18} className="animate-spin text-[#4D6BFE] mx-auto" />
-        ) : (
-          <div className="text-2xl font-bold text-[#4D6BFE]">{stationCount}</div>
-        )}
-        <div className="text-[11px] font-semibold text-[#4D6BFE] mt-0.5">Total Stasiun</div>
-      </div>
-      <div className="rounded-xl p-3 bg-cyan-50 border border-cyan-200 text-center">
-        <div className="text-2xl font-bold text-cyan-800">
-          {loading ? <Loader2 size={18} className="animate-spin text-cyan-400 mx-auto" /> : '✓'}
+  const commuterCount = trains.filter(isCommuter).length
+  const jarakJauhCount = trains.length - commuterCount
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-slate-200/90 bg-[#EEF3FF] p-4 text-center">
+        <div className="w-10 h-10 rounded-xl bg-white shadow-sm flex items-center justify-center mx-auto mb-2.5 text-[#4D6BFE]">
+          <MapIcon size={20} />
         </div>
-        <div className="text-[11px] font-semibold text-cyan-600 mt-0.5">Data Live</div>
+        <h3 className="text-sm font-bold text-slate-800">Peta Rel Indonesia</h3>
+        <p className="text-xs text-slate-500 mt-1">
+          Data stasiun dan jalur rel diambil langsung dari{' '}
+          <span className="font-semibold text-[#4D6BFE]">Gapeka 2025</span>.
+          Klik pin stasiun atau kereta untuk melihat detailnya.
+        </p>
       </div>
-    </div>
 
-    <div className="rounded-xl bg-white border border-slate-200 p-3.5 space-y-2.5 shadow-sm">
-      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Legenda Pin</p>
-      <div className="flex items-center gap-2.5">
-        <div className="w-3.5 h-3.5 rounded-full bg-[#0891B2] border-2 border-white shadow-sm" />
-        <span className="text-xs font-medium text-slate-700">Stasiun (data API)</span>
+      {/* Stats cards: Total Stasiun, Total Commuter Line, Total Kereta Jarak Jauh (all matching color) */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-xl p-2.5 bg-[#EEF3FF] border border-[#DCE4FF] text-center">
+          {loading ? (
+            <Loader2 size={16} className="animate-spin text-[#4D6BFE] mx-auto" />
+          ) : (
+            <div className="text-xl font-bold text-[#4D6BFE]">{stationCount}</div>
+          )}
+          <div className="text-[10px] font-semibold text-[#4D6BFE] mt-0.5 leading-tight">Total Stasiun</div>
+        </div>
+
+        <div className="rounded-xl p-2.5 bg-[#EEF3FF] border border-[#DCE4FF] text-center">
+          {loading ? (
+            <Loader2 size={16} className="animate-spin text-[#4D6BFE] mx-auto" />
+          ) : (
+            <div className="text-xl font-bold text-[#4D6BFE]">{commuterCount}</div>
+          )}
+          <div className="text-[10px] font-semibold text-[#4D6BFE] mt-0.5 leading-tight">Commuter Line</div>
+        </div>
+
+        <div className="rounded-xl p-2.5 bg-[#EEF3FF] border border-[#DCE4FF] text-center">
+          {loading ? (
+            <Loader2 size={16} className="animate-spin text-[#4D6BFE] mx-auto" />
+          ) : (
+            <div className="text-xl font-bold text-[#4D6BFE]">{jarakJauhCount}</div>
+          )}
+          <div className="text-[10px] font-semibold text-[#4D6BFE] mt-0.5 leading-tight">Jarak Jauh</div>
+        </div>
       </div>
-      <div className="flex items-center gap-2.5">
-        <div className="w-3 h-3 bg-[#4D6BFE] rounded-sm opacity-80 border border-white" />
-        <span className="text-xs font-medium text-slate-700">Jalur Rel (polyline)</span>
+
+      {/* Legenda Pin: matches colors and symbols on map */}
+      <div className="rounded-xl bg-white border border-slate-200 p-3.5 space-y-3 shadow-sm">
+        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Legenda Peta</p>
+
+        {/* Stasiun */}
+        <div className="flex items-center gap-3">
+          <div className="w-8 flex items-center justify-center shrink-0">
+            <div className="w-5 h-5 bg-[#EC4899] border-2 border-white rounded-[50%_50%_50%_0] -rotate-45 flex items-center justify-center shadow-xs">
+              <span className="w-1.5 h-1.5 bg-white rounded-full rotate-45" />
+            </div>
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-slate-800">Stasiun</div>
+            <div className="text-[10px] text-slate-400">Pin pink + nama stasiun</div>
+          </div>
+        </div>
+
+        {/* Commuter Line */}
+        <div className="flex items-center gap-3">
+          <div className="w-8 flex items-center justify-center shrink-0">
+            <div className="w-6 h-6 rounded-full bg-[#3B82F6] text-white flex items-center justify-center shadow-xs border border-white">
+              <Train size={12} />
+            </div>
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-slate-800">Commuter Line</div>
+            <div className="text-[10px] text-slate-400">Badge biru + icon kereta</div>
+          </div>
+        </div>
+
+        {/* Kereta Jarak Jauh */}
+        <div className="flex items-center gap-3">
+          <div className="w-8 flex items-center justify-center shrink-0">
+            <div className="w-6 h-6 rounded-full bg-[#9333EA] text-white flex items-center justify-center shadow-xs border border-white">
+              <Compass size={12} />
+            </div>
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-slate-800">Kereta Jarak Jauh</div>
+            <div className="text-[10px] text-slate-400">Badge ungu + icon kompas</div>
+          </div>
+        </div>
+
+        {/* Jalur Rel */}
+        <div className="flex items-center gap-3">
+          <div className="w-8 flex items-center justify-center shrink-0">
+            <div className="w-6 h-1.5 bg-[#3B82F6] rounded-full" />
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-slate-800">Jalur Rel</div>
+            <div className="text-[10px] text-slate-400">Polyline rute rel kereta api</div>
+          </div>
+        </div>
       </div>
     </div>
-  </div>
-)
+  )
+}
 
 // ── Schedule panel ───────────────────────────────────────────────
 interface JadwalPanelProps {
@@ -368,6 +433,13 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+  const [liveTime, setLiveTime] = useState<Date>(new Date())
+
+  // Update live clock every second
+  useEffect(() => {
+    const timer = setInterval(() => setLiveTime(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
 
   const loadData = () => {
     clearApiCache()
@@ -433,7 +505,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           <div className="flex items-center gap-1">
             <button
               onClick={loadData}
-              title="Refresh data"
+              title={
+                lastRefresh
+                  ? `Terakhir diperbarui: ${lastRefresh.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\./g, ':')}`
+                  : 'Perbarui data'
+              }
               className="p-2 rounded-full text-slate-400 hover:text-[#4D6BFE] hover:bg-[#EEF3FF] transition-colors cursor-pointer"
             >
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
@@ -469,7 +545,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         <div className="flex-1 overflow-y-auto p-4 sidebar-scroll space-y-3 bg-[#F9F8F8]">
           <PanelErrorBoundary key={activeTab}>
             {activeTab === 'maps' && (
-              <MiniMapPanel stationCount={stations.length} loading={loading} />
+              <MiniMapPanel
+                stationCount={stations.length}
+                trains={trains}
+                loading={loading}
+              />
             )}
             {activeTab === 'jadwal' && (
               <JadwalPanel
@@ -500,11 +580,9 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               {loading ? 'Memperbarui...' : 'Tersambung Real-time'}
             </span>
           </div>
-          {lastRefresh && (
-            <span className="text-[11px] text-slate-400">
-              {lastRefresh.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
-            </span>
-          )}
+          <span className="text-[11px] font-mono text-slate-500 font-semibold tracking-tight">
+            {liveTime.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\./g, ':')}
+          </span>
         </div>
       </aside>
     </>

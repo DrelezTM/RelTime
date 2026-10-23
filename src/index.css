@@ -60,3 +60,30 @@ body {
 .maplibregl-popup-tip {
   border-top-color: #ffffff !important;
 }
+
+/* Scale indicator (clean text-only without box or background) */
+.maplibregl-ctrl-scale {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  margin-top: 6px !important;
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  color: #334155 !important;
+  text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff, 0 1px 4px rgba(0, 0, 0, 0.25) !important;
+  pointer-events: none !important;
+  user-select: none !important;
+  text-align: right !important;
+}
+
+/* Mobile: elevate bottom-right map controls so they don't collide with navigation / bottom bar */
+@media (max-width: 640px) {
+  .maplibregl-ctrl-bottom-right {
+    bottom: 56px !important;
+    right: 12px !important;
+  }
+}
+
