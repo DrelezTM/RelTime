@@ -1,5 +1,5 @@
-// Base URL for Gapeka 2025 API
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://www.gapeka2025.com/api/v1'
+// Base URL for Gapeka 2025 API (uses Vite proxy in dev to avoid CORS)
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 
 // ─────────────────────────────────────────
 // Types
@@ -19,10 +19,16 @@ export interface Station {
 /** Route point: [dist_cm, lat, lng] */
 export type RoutePt = [number, number, number]
 
+export interface RouteSegment {
+  pos: [number, number][]
+  pos_cm?: number[]
+}
+
 export interface Route {
   id: number
   len_cm: number
-  pts: RoutePt[]
+  paths?: RouteSegment[]
+  pts?: [number, number, number][]
 }
 
 export interface TrainStop {
@@ -50,13 +56,101 @@ export interface Train {
 // Normalizers
 // ─────────────────────────────────────────
 
-function normalizeStation(tuple: StationTuple): Station {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeStation(raw: any): Station {
+  if (Array.isArray(raw)) {
+    return {
+      id: Number(raw[0] ?? 0),
+      code: String(raw[1] ?? ''),
+      name: String(raw[2] ?? ''),
+      lat: Number(raw[3] ?? 0),
+      lng: Number(raw[4] ?? 0),
+    }
+  }
   return {
-    id: tuple[0],
-    code: tuple[1],
-    name: tuple[2],
-    lat: tuple[3],
-    lng: tuple[4],
+    id: Number(raw.st_id ?? raw.id ?? 0),
+    code: String(raw.cd ?? raw.code ?? ''),
+    name: String(raw.nm ?? raw.name ?? ''),
+    lat: Number(Array.isArray(raw.pos) ? raw.pos[0] : (raw.lat ?? 0)),
+    lng: Number(Array.isArray(raw.pos) ? raw.pos[1] : (raw.lng ?? 0)),
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeRoute(raw: any): Route {
+  return {
+    id: Number(raw.route_id ?? raw.id ?? 0),
+    len_cm: Number(raw.len_cm ?? 0),
+    paths: Array.isArray(raw.paths) ? raw.paths : undefined,
+    pts: Array.isArray(raw.pts) ? raw.pts : undefined,
+  }
+}
+
+/**
+ * Gapeka 2025 raw data uses "paths" for stops, and timestamps in UTC ms.
+ * This normalizes time strings (e.g. "14:15:00" WIB) or converts UTC ms to local ms from midnight.
+ */
+function parseTimeToLocalMs(timeStr: string | null | undefined, fallbackUtcMs?: number): number {
+  if (timeStr && timeStr !== 'Ls' && timeStr !== 'null') {
+    const parts = timeStr.split(':')
+    if (parts.length >= 2) {
+      const h = parseInt(parts[0], 10) || 0
+      const m = parseInt(parts[1], 10) || 0
+      const s = parseInt(parts[2] || '0', 10) || 0
+      return (h * 3600 + m * 60 + s) * 1000
+    }
+  }
+  if (typeof fallbackUtcMs === 'number' && !isNaN(fallbackUtcMs)) {
+    // Gapeka timestamps in ms are UTC; Indonesian train operations run on WIB (UTC+7)
+    return (fallbackUtcMs + 7 * 3600 * 1000) % 86400000
+  }
+  return 0
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeTrain(raw: any): Train {
+  // Real API returns "paths", fallback to "stops"
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rawPaths: any[] = Array.isArray(raw.paths)
+    ? raw.paths
+    : Array.isArray(raw.stops)
+    ? raw.stops
+    : []
+
+  const stops: TrainStop[] = rawPaths.map((p) => {
+    const st = String(p.st_cd ?? p.st ?? '')
+    const depStr = p.usr_depart ?? p.dep ?? null
+    const arrStr = p.usr_arriv ?? p.arr ?? null
+    const dep_ms = parseTimeToLocalMs(depStr, p.depart_ms ?? p.dep_ms)
+    const arr_ms = parseTimeToLocalMs(arrStr, p.arriv_ms ?? p.arr_ms)
+    const inv = Boolean(p.inv_route ?? p.inv ?? false)
+
+    return {
+      st,
+      dep_ms,
+      arr_ms,
+      dep: depStr === 'null' || !depStr ? null : depStr,
+      arr: arrStr === 'null' || !arrStr ? null : arrStr,
+      inv,
+    }
+  })
+
+  const firstStop = stops[0]
+  const lastStop = stops[stops.length - 1]
+
+  const dep_ms = parseTimeToLocalMs(firstStop?.dep, raw.depart_ms ?? raw.dep_ms)
+  const arr_ms = parseTimeToLocalMs(lastStop?.arr, raw.arriv_ms ?? raw.arr_ms)
+
+  return {
+    id: Number(raw.tr_id ?? raw.id ?? 0),
+    code: String(raw.tr_cd ?? raw.code ?? ''),
+    name: String(raw.tr_name ?? raw.name ?? ''),
+    from: String(raw.start_st_cd ?? raw.from ?? firstStop?.st ?? ''),
+    to: String(raw.end_st_cd ?? raw.to ?? lastStop?.st ?? ''),
+    dep_ms,
+    arr_ms,
+    day_ms: Number(raw.mod_day_ms ?? raw.day_ms ?? 86400000),
+    stops,
   }
 }
 
@@ -68,21 +162,33 @@ let _stationsCache: Station[] | null = null
 let _routesCache: Route[] | null = null
 let _gapekaCache: Train[] | null = null
 
+export function clearApiCache() {
+  _stationsCache = null
+  _routesCache = null
+  _gapekaCache = null
+}
+
 export async function fetchStations(): Promise<Station[]> {
   if (_stationsCache) return _stationsCache
-  const res = await fetch(`${BASE_URL}/public-station/stations`)
+  let res = await fetch(`${BASE_URL}/public-station/stations`)
+  if (!res.ok) res = await fetch(`${BASE_URL}/public-route/route-path`)
   if (!res.ok) throw new Error(`Stations fetch failed: ${res.status}`)
   const json = await res.json()
-  _stationsCache = (json.stations as StationTuple[]).map(normalizeStation)
+  const rawList = json.stations || json.data || (Array.isArray(json) ? json : [])
+  _stationsCache = (rawList as any[])
+    .map(normalizeStation)
+    .filter((s) => typeof s.lat === 'number' && typeof s.lng === 'number' && !isNaN(s.lat) && !isNaN(s.lng) && s.lat !== 0 && s.lng !== 0)
   return _stationsCache
 }
 
 export async function fetchRoutes(): Promise<Route[]> {
   if (_routesCache) return _routesCache
-  const res = await fetch(`${BASE_URL}/public-route/route-path`)
+  let res = await fetch(`${BASE_URL}/public-route/route-path`)
+  if (!res.ok) res = await fetch(`${BASE_URL}/public-station/stations`)
   if (!res.ok) throw new Error(`Routes fetch failed: ${res.status}`)
   const json = await res.json()
-  _routesCache = json.routes as Route[]
+  const rawList = json.routes || json.data || (Array.isArray(json) ? json : [])
+  _routesCache = (rawList as any[]).map(normalizeRoute)
   return _routesCache
 }
 
@@ -91,7 +197,11 @@ export async function fetchGapeka(): Promise<Train[]> {
   const res = await fetch(`${BASE_URL}/public-train/gapeka`)
   if (!res.ok) throw new Error(`Gapeka fetch failed: ${res.status}`)
   const json = await res.json()
-  _gapekaCache = json.trains as Train[]
+  const rawList = json.trains ?? json.data ?? (Array.isArray(json) ? json : [])
+  _gapekaCache = Array.isArray(rawList)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ? rawList.filter((t): t is Record<string, any> => !!t && typeof t === 'object').map(normalizeTrain)
+    : []
   return _gapekaCache
 }
 
@@ -138,8 +248,9 @@ export function getUpcomingTrainsFromStation(
 
   const results: Array<{ train: Train; stop: TrainStop }> = []
 
-  for (const train of trains) {
-    const stop = train.stops.find((s) => s.st === stationCode && !s.inv)
+  for (const train of (trains || [])) {
+    if (!train || !Array.isArray(train.stops)) continue
+    const stop = train.stops.find((s) => s && s.st === stationCode && !s.inv)
     if (!stop) continue
     const diff = stop.dep_ms - now
     if (diff >= 0 && diff <= windowMs) {

@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Component, type ReactNode, type ErrorInfo } from 'react'
 import { Map as MapIcon, Clock, Train, X, ArrowRight, Loader2, RefreshCw } from 'lucide-react'
 import {
-  fetchGapeka, fetchStations,
+  fetchGapeka, fetchStations, clearApiCache,
   msToHHMM, msToDuration, nowMs,
   type Train as TrainEntry, type Station,
 } from '../api'
@@ -14,6 +14,51 @@ interface SidebarProps {
 }
 
 type TrainData = TrainEntry
+
+// ── Error Boundary for Sidebar Panels ────────────────────────────
+interface ErrorBoundaryProps {
+  children: ReactNode
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean
+  error: Error | null
+}
+
+class PanelErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Sidebar panel crash:', error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center py-10 gap-2 text-center">
+          <p className="text-sm font-semibold text-red-600">Terjadi kesalahan tampilan</p>
+          <p className="text-xs text-slate-500 max-w-[280px] break-words">
+            {this.state.error?.message || 'Gagal memuat komponen.'}
+          </p>
+          <button
+            onClick={() => this.setState({ hasError: false, error: null })}
+            className="mt-2 text-xs font-semibold text-[#4D6BFE] hover:underline cursor-pointer"
+          >
+            Muat ulang tab
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 // ── Maps info panel ──────────────────────────────────────────────
 interface MiniMapPanelProps {
@@ -76,19 +121,6 @@ interface JadwalPanelProps {
 }
 
 const JadwalPanel = ({ trains, stations, loading, error, onRefresh }: JadwalPanelProps) => {
-  const stMap = new Map(stations.map((s) => [s.code, s.name]))
-  const now = nowMs()
-
-  // Get next 20 departures across all trains, from the current time
-  const upcoming = trains
-    .flatMap((train) =>
-      train.stops
-        .filter((stop) => !stop.inv && stop.dep_ms >= now && stop.dep !== null)
-        .map((stop) => ({ train, stop }))
-    )
-    .sort((a, b) => a.stop.dep_ms - b.stop.dep_ms)
-    .slice(0, 20)
-
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-slate-500 gap-3">
@@ -105,13 +137,32 @@ const JadwalPanel = ({ trains, stations, loading, error, onRefresh }: JadwalPane
         <p className="text-xs text-slate-500">{error}</p>
         <button
           onClick={onRefresh}
-          className="flex items-center gap-1.5 text-xs font-semibold text-[#4D6BFE] hover:underline"
+          className="flex items-center gap-1.5 text-xs font-semibold text-[#4D6BFE] hover:underline cursor-pointer"
         >
           <RefreshCw size={12} /> Coba lagi
         </button>
       </div>
     )
   }
+
+  const safeStations = Array.isArray(stations) ? stations : []
+  const safeTrains = Array.isArray(trains) ? trains : []
+  const stMap = new Map(safeStations.map((s) => [s.code, s.name]))
+  const now = nowMs()
+
+  // Get next 20 departures across all trains, from the current time, wrapping around midnight
+  const upcoming = safeTrains
+    .flatMap((train) => {
+      const stops = Array.isArray(train?.stops) ? train.stops : []
+      return stops
+        .filter((stop) => stop && !stop.inv && stop.dep !== null && stop.dep !== 'Ls')
+        .map((stop) => {
+          const diffMs = (stop.dep_ms - now + 86400000) % 86400000
+          return { train, stop, diffMs }
+        })
+    })
+    .sort((a, b) => a.diffMs - b.diffMs)
+    .slice(0, 20)
 
   if (upcoming.length === 0) {
     return (
@@ -123,17 +174,18 @@ const JadwalPanel = ({ trains, stations, loading, error, onRefresh }: JadwalPane
 
   return (
     <div className="space-y-2.5">
-      {upcoming.map(({ train, stop }, i) => {
+      {upcoming.map(({ train, stop, diffMs }, i) => {
         const toName = stMap.get(train.to) ?? train.to
         const fromName = stMap.get(stop.st) ?? stop.st
         const depLabel = msToHHMM(stop.dep_ms)
         const arrLabel = msToHHMM(train.arr_ms)
-        const dur = msToDuration(train.arr_ms - stop.dep_ms)
-        const diffMin = Math.round((stop.dep_ms - now) / 60000)
+        const dur = msToDuration((train.arr_ms - stop.dep_ms + 86400000) % 86400000)
+        const diffMin = Math.round(diffMs / 60000)
+        const diffText = diffMin <= 1 ? 'Segera' : diffMin < 60 ? `${diffMin} mnt` : `${Math.floor(diffMin / 60)} j ${diffMin % 60} mnt`
 
         return (
           <div
-            key={`${train.id}-${i}`}
+            key={`${train.id}-${stop.st}-${i}`}
             className="rounded-xl bg-white border border-slate-200 p-3.5 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer group shadow-sm"
           >
             <div className="flex items-start justify-between mb-2">
@@ -148,7 +200,7 @@ const JadwalPanel = ({ trains, stations, loading, error, onRefresh }: JadwalPane
                 </div>
               </div>
               <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-300 shrink-0">
-                {diffMin <= 1 ? 'Segera' : `${diffMin} mnt`}
+                {diffText}
               </span>
             </div>
 
@@ -181,18 +233,6 @@ interface KeretaPanelProps {
 }
 
 const KeretaPanel = ({ trains, stations, loading, error, onRefresh }: KeretaPanelProps) => {
-  const stMap = new Map(stations.map((s) => [s.code, s.name]))
-  const now = nowMs()
-
-  // Show trains currently "in service" — dep_ms <= now <= arr_ms
-  const active = trains
-    .filter((t) => t.dep_ms <= now && now <= t.arr_ms)
-    .slice(0, 15)
-
-  // Find next stop for a running train
-  const getNextStop = (train: TrainData) =>
-    train.stops.find((s) => !s.inv && s.arr_ms > now)
-
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-slate-500 gap-3">
@@ -208,12 +248,38 @@ const KeretaPanel = ({ trains, stations, loading, error, onRefresh }: KeretaPane
         <p className="text-sm font-semibold text-red-600">Gagal memuat kereta</p>
         <button
           onClick={onRefresh}
-          className="flex items-center gap-1.5 text-xs font-semibold text-[#4D6BFE] hover:underline"
+          className="flex items-center gap-1.5 text-xs font-semibold text-[#4D6BFE] hover:underline cursor-pointer"
         >
           <RefreshCw size={12} /> Coba lagi
         </button>
       </div>
     )
+  }
+
+  const safeStations = Array.isArray(stations) ? stations : []
+  const safeTrains = Array.isArray(trains) ? trains : []
+  const stMap = new Map(safeStations.map((s) => [s.code, s.name]))
+  const now = nowMs()
+
+  // Show trains currently "in service"
+  const active = safeTrains
+    .filter((t) => {
+      if (!t || typeof t.dep_ms !== 'number' || typeof t.arr_ms !== 'number') return false
+      if (t.dep_ms <= t.arr_ms) {
+        return t.dep_ms <= now && now <= t.arr_ms
+      }
+      return now >= t.dep_ms || now <= t.arr_ms
+    })
+    .slice(0, 15)
+
+  // Find next stop for a running train
+  const getNextStop = (train: TrainData) => {
+    const stops = Array.isArray(train?.stops) ? train.stops : []
+    return stops.find((s) => {
+      if (!s || s.inv) return false
+      const diff = (s.arr_ms - now + 86400000) % 86400000
+      return diff > 0 && diff < 86400000 / 2
+    })
   }
 
   if (active.length === 0) {
@@ -230,10 +296,10 @@ const KeretaPanel = ({ trains, stations, loading, error, onRefresh }: KeretaPane
         const nextStop = getNextStop(train)
         const nextStopName = nextStop ? (stMap.get(nextStop.st) ?? nextStop.st) : '—'
         const etaNext = nextStop ? msToDuration(nextStop.arr_ms - now) : '—'
-        const progress = Math.min(
-          100,
-          Math.round(((now - train.dep_ms) / (train.arr_ms - train.dep_ms)) * 100),
-        )
+        const duration = (train.arr_ms || 0) - (train.dep_ms || 0)
+        const progress = duration > 0
+          ? Math.min(100, Math.max(0, Math.round(((now - train.dep_ms) / duration) * 100)))
+          : 0
         const fromName = stMap.get(train.from) ?? train.from
         const toName = stMap.get(train.to) ?? train.to
 
@@ -304,6 +370,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
 
   const loadData = () => {
+    clearApiCache()
     setLoading(true)
     setError(null)
     Promise.all([fetchGapeka(), fetchStations()])
@@ -400,27 +467,29 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 sidebar-scroll space-y-3 bg-[#F9F8F8]">
-          {activeTab === 'maps' && (
-            <MiniMapPanel stationCount={stations.length} loading={loading} />
-          )}
-          {activeTab === 'jadwal' && (
-            <JadwalPanel
-              trains={trains}
-              stations={stations}
-              loading={loading}
-              error={error}
-              onRefresh={loadData}
-            />
-          )}
-          {activeTab === 'kereta' && (
-            <KeretaPanel
-              trains={trains}
-              stations={stations}
-              loading={loading}
-              error={error}
-              onRefresh={loadData}
-            />
-          )}
+          <PanelErrorBoundary key={activeTab}>
+            {activeTab === 'maps' && (
+              <MiniMapPanel stationCount={stations.length} loading={loading} />
+            )}
+            {activeTab === 'jadwal' && (
+              <JadwalPanel
+                trains={trains}
+                stations={stations}
+                loading={loading}
+                error={error}
+                onRefresh={loadData}
+              />
+            )}
+            {activeTab === 'kereta' && (
+              <KeretaPanel
+                trains={trains}
+                stations={stations}
+                loading={loading}
+                error={error}
+                onRefresh={loadData}
+              />
+            )}
+          </PanelErrorBoundary>
         </div>
 
         {/* Footer */}
