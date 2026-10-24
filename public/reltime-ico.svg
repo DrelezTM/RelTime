@@ -1,0 +1,23 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g clip-path="url(#clip0_53_2)">
+<rect x="1" y="1.58984" width="28.1987" height="2.07343" fill="#A6824D"/>
+<rect x="1" y="3.66406" width="28.1987" height="1.17494" fill="#67502C"/>
+<rect x="1" y="9.81543" width="28.1987" height="2.07343" fill="#A6824D"/>
+<rect x="1" y="11.8887" width="28.1987" height="1.17494" fill="#67502C"/>
+<rect x="1" y="18.0391" width="28.1987" height="2.07343" fill="#A6824D"/>
+<rect x="1" y="20.1128" width="28.1987" height="1.17494" fill="#67502C"/>
+<rect x="1" y="26.2642" width="28.1987" height="2.07343" fill="#A6824D"/>
+<rect x="1" y="28.3384" width="28.1987" height="1.17494" fill="#67502C"/>
+<rect x="3.76489" width="2.07343" height="31.1015" fill="#686868"/>
+<rect x="2.65869" width="1.10583" height="31.1015" fill="#9C9C9C"/>
+<rect x="24.3608" width="2.07343" height="31.1015" fill="#686868"/>
+<rect x="26.4338" width="1.10583" height="31.1015" fill="#9C9C9C"/>
+<circle opacity="0.5" cx="24.3604" cy="25.0196" r="6.98055" fill="#70D9B6"/>
+<circle cx="24.3608" cy="25.0209" r="4.24308" fill="#15B38C"/>
+</g>
+<defs>
+<clipPath id="clip0_53_2">
+<rect width="32" height="32" fill="white"/>
+</clipPath>
+</defs>
+</svg>
