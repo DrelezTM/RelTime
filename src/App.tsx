@@ -11,6 +11,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarTab, setSidebarTab] = useState<'maps' | 'jadwal' | 'kereta'>('maps')
   const [selectedJadwalStation, setSelectedJadwalStation] = useState<Station | null>(null)
+  const [selectedKeretaTrain, setSelectedKeretaTrain] = useState<Train | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [stations, setStations] = useState<Station[]>([])
   const [trains, setTrains] = useState<Train[]>([])
@@ -52,6 +53,9 @@ export default function App() {
       mapControllerRef.current?.flyToStation(item.code)
     } else {
       mapControllerRef.current?.flyToTrain(item.code, item.train?.id, item.title)
+      if (item.train) {
+        setSelectedKeretaTrain(item.train)
+      }
     }
   }, [])
 
@@ -62,6 +66,7 @@ export default function App() {
   }, [])
 
   const handleSelectJadwalTrain = useCallback((train: Train) => {
+    setSelectedKeretaTrain(train)
     // 1. Ensure appropriate train filter is active so user sees the marker on the map
     const isCommuter =
       /commuter|krl|lin|feeder|prameks|bandara/i.test(train.name) ||
@@ -74,6 +79,25 @@ export default function App() {
 
     // 3. Close sidebar so user immediately sees the focused train on the map
     setSidebarOpen(false)
+  }, [])
+
+  const handleSelectKeretaTrain = useCallback((train: Train) => {
+    setSelectedKeretaTrain(train)
+
+    // 1. Ensure appropriate train filter is active so user sees the marker on the map
+    const isCommuter =
+      /commuter|krl|lin|feeder|prameks|bandara/i.test(train.name) ||
+      /commuter|krl|lin/i.test(train.code)
+    const filterType: FilterType = isCommuter ? 'commuter' : 'jarak-jauh'
+    setActiveFilters((prev) => (prev.includes(filterType) ? prev : [...prev, filterType]))
+
+    // 2. Direct map to that train's marker position (sidebar remains open so user can inspect stations)
+    mapControllerRef.current?.flyToTrain(train.code, train.id, train.name)
+  }, [])
+
+  const handleFlyToStation = useCallback((stationCode: string) => {
+    setActiveFilters((prev) => (prev.includes('stasiun') ? prev : [...prev, 'stasiun']))
+    mapControllerRef.current?.flyToStation(stationCode)
   }, [])
 
   const getMapCenter = useCallback((): [number, number] | null => {
@@ -156,6 +180,9 @@ export default function App() {
         onTabChange={setSidebarTab}
         selectedJadwalStation={selectedJadwalStation}
         onSelectJadwalTrain={handleSelectJadwalTrain}
+        selectedKeretaTrain={selectedKeretaTrain}
+        onSelectKeretaTrain={handleSelectKeretaTrain}
+        onFlyToStation={handleFlyToStation}
         stations={stations}
         trains={trains}
       />

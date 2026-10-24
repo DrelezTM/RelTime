@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, Component, type ReactNode, type ErrorInfo } from 'react'
 import {
   Map as MapIcon, Clock, Train, Compass, X, ArrowRight, Loader2, RefreshCw,
-  Search, MapPin, Navigation,
+  Search, MapPin, ChevronLeft, ChevronRight, LocateFixed, Check
 } from 'lucide-react'
 import {
   fetchGapeka, fetchStations, clearApiCache,
@@ -18,6 +18,9 @@ interface SidebarProps {
   onTabChange?: (tab: SidebarTab) => void
   selectedJadwalStation?: Station | null
   onSelectJadwalTrain?: (train: TrainData) => void
+  selectedKeretaTrain?: TrainData | null
+  onSelectKeretaTrain?: (train: TrainData) => void
+  onFlyToStation?: (stationCode: string) => void
   stations?: Station[]
   trains?: TrainData[]
 }
@@ -825,14 +828,285 @@ interface KeretaPanelProps {
   loading: boolean
   error: string | null
   onRefresh: () => void
+  selectedTrain?: TrainData | null
+  onSelectTrain?: (train: TrainData) => void
+  onFlyToStation?: (stationCode: string) => void
 }
 
-const KeretaPanel = ({ trains, stations, loading, error, onRefresh }: KeretaPanelProps) => {
+function cleanStCode(code?: string): string {
+  if (!code) return ''
+  return code.replace(/^_/, '').toUpperCase()
+}
+
+function formatStopArrival(stop: TrainStop, isOrigin: boolean): string {
+  if (isOrigin) return '—'
+  if (stop.arr === 'Ls' || stop.dep === 'Ls') {
+    return `~${msToHHMM(stop.arr_ms || stop.dep_ms)}`
+  }
+  if (stop.arr && stop.arr !== 'null' && stop.arr !== 'Ls') {
+    return stop.arr.slice(0, 5)
+  }
+  return msToHHMM(stop.arr_ms)
+}
+
+function formatStopDeparture(stop: TrainStop, isTerminus: boolean): string {
+  if (isTerminus) return '—'
+  if (stop.dep === 'Ls' || stop.arr === 'Ls') {
+    return 'Ls'
+  }
+  if (stop.dep && stop.dep !== 'null' && stop.dep !== 'Ls') {
+    return stop.dep.slice(0, 5)
+  }
+  return msToHHMM(stop.dep_ms)
+}
+
+const KeretaPanel = ({
+  trains,
+  stations,
+  loading,
+  error,
+  onRefresh,
+  selectedTrain: propSelectedTrain,
+  onSelectTrain,
+  onFlyToStation,
+}: KeretaPanelProps) => {
+  const [searchQuery, setSearchQuery] = useState('')
+  const [filterChip, setFilterChip] = useState<'all' | 'berjalan' | 'commuter' | 'jarak-jauh'>('all')
+  const [selectedTrain, setSelectedTrain] = useState<TrainData | null>(null)
+  const [visibleLimit, setVisibleLimit] = useState(25)
+
+  // Sync internal selected train with external prop
+  useEffect(() => {
+    if (propSelectedTrain) {
+      setSelectedTrain(propSelectedTrain)
+    }
+  }, [propSelectedTrain])
+
+  const safeStations = useMemo(() => (Array.isArray(stations) ? stations : []), [stations])
+  const safeTrains = useMemo(() => (Array.isArray(trains) ? trains : []), [trains])
+
+  // Comprehensive station lookup dictionary
+  const stMap = useMemo(() => {
+    const map = new Map<string, Station>()
+    for (const s of safeStations) {
+      if (!s || !s.code) continue
+      const raw = s.code
+      const clean = cleanStCode(raw)
+      map.set(raw, s)
+      map.set(clean, s)
+      map.set(clean.toLowerCase(), s)
+    }
+    return map
+  }, [safeStations])
+
+  const getStName = (code: string) => {
+    const clean = cleanStCode(code)
+    return stMap.get(clean)?.name || stMap.get(code)?.name || clean || code
+  }
+
+  const now = nowMs()
+
+  // Helper to determine real-time status of a train
+  const getTrainStatus = (train: TrainData) => {
+    const isCommuter =
+      /commuter|krl|lin|feeder|prameks|bandara/i.test(train.name) ||
+      /commuter|krl|lin/i.test(train.code)
+
+    const dep = train.dep_ms
+    const arr = train.arr_ms
+
+    const isActive = dep <= arr
+      ? (dep <= now && now <= arr)
+      : (now >= dep || now <= arr)
+
+    let state: 'berjalan' | 'belum' | 'selesai' = 'selesai'
+    if (isActive) {
+      state = 'berjalan'
+    } else if (dep <= arr) {
+      state = now < dep ? 'belum' : 'selesai'
+    } else {
+      state = (now > arr && now < dep) ? 'belum' : 'selesai'
+    }
+
+    const totalDuration = (arr - dep + 86400000) % 86400000
+    const elapsed = (now - dep + 86400000) % 86400000
+    const progress = totalDuration > 0
+      ? Math.min(100, Math.max(0, Math.round((elapsed / totalDuration) * 100)))
+      : 0
+
+    // Next stop for active train
+    const stops = Array.isArray(train.stops) ? train.stops.filter((s) => !s.inv) : []
+    let nextStop: TrainStop | null = null
+    let nextStopIdx = -1
+
+    if (isActive && stops.length > 0) {
+      for (let i = 0; i < stops.length; i++) {
+        const s = stops[i]
+        const targetMs = s.dep_ms || s.arr_ms
+        const diff = (targetMs - now + 86400000) % 86400000
+        if (diff > 0 && diff < 43200000) {
+          nextStop = s
+          nextStopIdx = i
+          break
+        }
+      }
+    }
+
+    const nextStopName = nextStop ? getStName(nextStop.st) : ''
+    const nextStopEta = nextStop
+      ? msToDuration((nextStop.arr_ms - now + 86400000) % 86400000)
+      : ''
+
+    return {
+      isCommuter,
+      isActive,
+      state,
+      totalDuration,
+      progress,
+      nextStop,
+      nextStopIdx,
+      nextStopName,
+      nextStopEta,
+      stopsCount: stops.length,
+    }
+  }
+
+  // Filtered and scored trains list
+  const filteredTrains = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    const qClean = q.replace(/^ka\s+/i, '').trim()
+    const qWords = qClean.split(/\s+/).filter(Boolean)
+
+    let list = safeTrains
+
+    // Filter by chip category
+    if (filterChip === 'berjalan') {
+      list = list.filter((t) => {
+        const dep = t.dep_ms
+        const arr = t.arr_ms
+        return dep <= arr ? dep <= now && now <= arr : now >= dep || now <= arr
+      })
+    } else if (filterChip === 'commuter') {
+      list = list.filter(
+        (t) =>
+          /commuter|krl|lin|feeder|prameks|bandara/i.test(t.name) ||
+          /commuter|krl|lin/i.test(t.code)
+      )
+    } else if (filterChip === 'jarak-jauh') {
+      list = list.filter(
+        (t) =>
+          !/commuter|krl|lin|feeder|prameks|bandara/i.test(t.name) &&
+          !/commuter|krl|lin/i.test(t.code)
+      )
+    }
+
+    if (!qClean) {
+      // Sort: active trains first, then by departure time
+      return [...list].sort((a, b) => {
+        const aActive =
+          a.dep_ms <= a.arr_ms ? a.dep_ms <= now && now <= a.arr_ms : now >= a.dep_ms || now <= a.arr_ms
+        const bActive =
+          b.dep_ms <= b.arr_ms ? b.dep_ms <= now && now <= b.arr_ms : now >= b.dep_ms || now <= b.arr_ms
+        if (aActive !== bActive) return aActive ? -1 : 1
+        return a.dep_ms - b.dep_ms
+      })
+    }
+
+    const scored: Array<{ train: TrainData; score: number }> = []
+
+    for (const t of list) {
+      const codeLower = (t.code || '').toLowerCase()
+      const nameLower = (t.name || '').toLowerCase()
+      const fromName = getStName(t.from).toLowerCase()
+      const toName = getStName(t.to).toLowerCase()
+      const fromCode = cleanStCode(t.from).toLowerCase()
+      const toCode = cleanStCode(t.to).toLowerCase()
+
+      let score = 0
+
+      // Exact code match
+      if (codeLower === qClean) {
+        score += 1200
+      } else if (codeLower.startsWith(qClean)) {
+        score += 700
+      } else if (codeLower.includes(qClean)) {
+        score += 450
+      }
+
+      // Train name match
+      if (nameLower === qClean) {
+        score += 900
+      } else if (nameLower.startsWith(qClean)) {
+        score += 600
+      } else if (nameLower.includes(qClean)) {
+        score += 350
+      }
+
+      // Origin / destination
+      if (fromCode === qClean || toCode === qClean) {
+        score += 400
+      } else if (fromName.includes(qClean) || toName.includes(qClean)) {
+        score += 300
+      }
+
+      // Multi-word match
+      if (qWords.length > 1) {
+        const matchesAll = qWords.every(
+          (w) =>
+            nameLower.includes(w) ||
+            codeLower.includes(w) ||
+            fromName.includes(w) ||
+            toName.includes(w) ||
+            fromCode.includes(w) ||
+            toCode.includes(w)
+        )
+        if (matchesAll) score += 250
+      }
+
+      // Intermediate station match
+      if (score === 0 && Array.isArray(t.stops)) {
+        for (const stp of t.stops) {
+          if (stp.inv) continue
+          const stpCode = cleanStCode(stp.st).toLowerCase()
+          const stpName = getStName(stp.st).toLowerCase()
+          if (stpCode === qClean || stpName.includes(qClean)) {
+            score += 180
+            break
+          }
+        }
+      }
+
+      if (score > 0) {
+        const isActive =
+          t.dep_ms <= t.arr_ms ? t.dep_ms <= now && now <= t.arr_ms : now >= t.dep_ms || now <= t.arr_ms
+        if (isActive) score += 60
+        scored.push({ train: t, score })
+      }
+    }
+
+    scored.sort((a, b) => b.score - a.score)
+    return scored.map((s) => s.train)
+  }, [safeTrains, searchQuery, filterChip, now, stMap])
+
+  // Counts for summary chips
+  const totalActiveCount = useMemo(() => {
+    return safeTrains.filter((t) => {
+      const dep = t.dep_ms
+      const arr = t.arr_ms
+      return dep <= arr ? dep <= now && now <= arr : now >= dep || now <= arr
+    }).length
+  }, [safeTrains, now])
+
+  const handleSelectTrainCard = (train: TrainData) => {
+    setSelectedTrain(train)
+    onSelectTrain?.(train)
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-slate-500 gap-3">
         <Loader2 size={24} className="animate-spin text-[#4D6BFE]" />
-        <span className="text-sm font-medium">Memuat data kereta...</span>
+        <span className="text-sm font-medium">Memuat data kereta Gapeka...</span>
       </div>
     )
   }
@@ -841,6 +1115,7 @@ const KeretaPanel = ({ trains, stations, loading, error, onRefresh }: KeretaPane
     return (
       <div className="flex flex-col items-center py-10 gap-3 text-center">
         <p className="text-sm font-semibold text-red-600">Gagal memuat kereta</p>
+        <p className="text-xs text-slate-500">{error}</p>
         <button
           onClick={onRefresh}
           className="flex items-center gap-1.5 text-xs font-semibold text-[#4D6BFE] hover:underline cursor-pointer"
@@ -851,106 +1126,585 @@ const KeretaPanel = ({ trains, stations, loading, error, onRefresh }: KeretaPane
     )
   }
 
-  const safeStations = Array.isArray(stations) ? stations : []
-  const safeTrains = Array.isArray(trains) ? trains : []
-  const stMap = new Map(safeStations.map((s) => [s.code, s.name]))
-  const now = nowMs()
+  // ─────────────────────────────────────────────────────────────
+  // VIEW MODE 1: DETAIL JADWAL & STASIUN KERETA TERPILIH
+  // (Result memunculkan stasiun mana saja & jam berapa sampai)
+  // ─────────────────────────────────────────────────────────────
+  if (selectedTrain) {
+    const {
+      isCommuter,
+      isActive,
+      state,
+      totalDuration,
+      progress,
+      nextStopIdx,
+      nextStopName,
+      nextStopEta,
+    } = getTrainStatus(selectedTrain)
 
-  // Show trains currently "in service"
-  const active = safeTrains
-    .filter((t) => {
-      if (!t || typeof t.dep_ms !== 'number' || typeof t.arr_ms !== 'number') return false
-      if (t.dep_ms <= t.arr_ms) {
-        return t.dep_ms <= now && now <= t.arr_ms
-      }
-      return now >= t.dep_ms || now <= t.arr_ms
-    })
-    .slice(0, 15)
+    const fromName = getStName(selectedTrain.from)
+    const toName = getStName(selectedTrain.to)
+    const fromCode = cleanStCode(selectedTrain.from)
+    const toCode = cleanStCode(selectedTrain.to)
 
-  // Find next stop for a running train
-  const getNextStop = (train: TrainData) => {
-    const stops = Array.isArray(train?.stops) ? train.stops : []
-    return stops.find((s) => {
-      if (!s || s.inv) return false
-      const diff = (s.arr_ms - now + 86400000) % 86400000
-      return diff > 0 && diff < 86400000 / 2
-    })
-  }
+    const validStops = (selectedTrain.stops || []).filter((s) => !s.inv)
+    const displayStops = validStops.length > 0 ? validStops : selectedTrain.stops || []
 
-  if (active.length === 0) {
     return (
-      <div className="text-center py-10 text-sm text-slate-500">
-        Tidak ada kereta yang sedang beroperasi saat ini.
+      <div className="space-y-3.5 pb-2">
+        {/* Top bar: Back button + Fly to map button */}
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => setSelectedTrain(null)}
+            className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-[#4D6BFE] bg-white border border-slate-200 hover:border-blue-300 rounded-xl px-3 py-2 shadow-xs cursor-pointer transition-all active:scale-98"
+          >
+            <ChevronLeft size={16} />
+            <span>Kembali ke Pencarian</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSelectTrain?.(selectedTrain)}
+            className="flex items-center gap-1.5 text-xs font-bold text-white bg-[#4D6BFE] hover:bg-[#3B5BFE] px-3 py-2 rounded-xl shadow-xs cursor-pointer transition-all active:scale-98"
+            title="Pusatkan posisi kereta di peta"
+          >
+            <LocateFixed size={14} />
+            <span>Pusatkan di Peta</span>
+          </button>
+        </div>
+
+        {/* Selected Train Header Card */}
+        <div className="rounded-2xl bg-white border border-slate-200 p-4 shadow-xs space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span
+                  className={`text-[9.5px] px-2 py-0.5 rounded-full font-bold border ${
+                    isCommuter
+                      ? 'bg-blue-50 text-[#3B82F6] border-blue-200'
+                      : 'bg-purple-50 text-[#9333EA] border-purple-200'
+                  }`}
+                >
+                  {isCommuter ? 'Commuter Line' : 'Kereta Jarak Jauh'}
+                </span>
+                <span className="text-[10px] font-mono font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
+                  KA {selectedTrain.code}
+                </span>
+              </div>
+
+              <h3 className="text-base font-extrabold text-slate-900 mt-1.5 tracking-tight leading-snug">
+                {selectedTrain.name}
+              </h3>
+            </div>
+
+            {/* Status badge */}
+            <div className="shrink-0">
+              {state === 'berjalan' ? (
+                <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-300 shadow-xs">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  Sedang Berjalan
+                </span>
+              ) : state === 'belum' ? (
+                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full font-semibold bg-amber-50 text-amber-700 border border-amber-300">
+                  <Clock size={11} />
+                  Belum Berangkat
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                  🏁 Selesai
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Route Origin ➔ Destination */}
+          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs">
+            <div className="flex-1 min-w-0">
+              <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Keberangkatan</div>
+              <div className="font-bold text-slate-900 truncate">{fromName}</div>
+              <div className="text-[10.5px] font-mono text-slate-500 font-semibold">{fromCode}</div>
+            </div>
+            <ArrowRight size={16} className="text-[#4D6BFE] shrink-0 mx-1" />
+            <div className="flex-1 min-w-0 text-right">
+              <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Tujuan Akhir</div>
+              <div className="font-bold text-slate-900 truncate">{toName}</div>
+              <div className="text-[10.5px] font-mono text-slate-500 font-semibold">{toCode}</div>
+            </div>
+          </div>
+
+          {/* Quick Metrics Bar */}
+          <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100 text-center">
+            <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100">
+              <div className="text-[10px] text-slate-400 font-semibold">Jadwal Operasi</div>
+              <div className="text-[11px] font-bold text-slate-800 font-mono mt-0.5">
+                {msToHHMM(selectedTrain.dep_ms)} - {msToHHMM(selectedTrain.arr_ms)}
+              </div>
+            </div>
+            <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100">
+              <div className="text-[10px] text-slate-400 font-semibold">Total Durasi</div>
+              <div className="text-[11px] font-bold text-slate-800 mt-0.5">
+                {msToDuration(totalDuration)}
+              </div>
+            </div>
+            <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100">
+              <div className="text-[10px] text-slate-400 font-semibold">Pemberhentian</div>
+              <div className="text-[11px] font-bold text-[#4D6BFE] mt-0.5">
+                {displayStops.length} Stasiun
+              </div>
+            </div>
+          </div>
+
+          {/* Progress bar if active */}
+          {isActive && (
+            <div className="p-2.5 rounded-xl bg-[#EEF3FF] border border-[#DCE4FF] space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-[#4D6BFE] flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
+                  Stasiun Berikutnya: <strong className="text-slate-900">{nextStopName}</strong>
+                </span>
+                <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                  {nextStopEta ? `~${nextStopEta}` : 'Segera'}
+                </span>
+              </div>
+              <div className="h-1.5 bg-white rounded-full overflow-hidden border border-blue-200">
+                <div
+                  className="h-full bg-[#4D6BFE] rounded-full transition-all duration-300"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px] text-slate-500 font-medium">
+                <span>{fromName}</span>
+                <span className="font-bold text-[#4D6BFE]">{progress}% Perjalanan</span>
+                <span>{toName}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Timeline Stasiun & Jam Sampai ── */}
+        <div className="rounded-2xl bg-white border border-slate-200 p-4 shadow-xs space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+            <div>
+              <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                <Clock size={13} className="text-[#4D6BFE]" />
+                <span>Jadwal Kedatangan Stasiun</span>
+              </h4>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Urutan stasiun yang dilalui beserta jam tiba dan berangkat
+              </p>
+            </div>
+            <span className="text-[10px] font-bold text-[#4D6BFE] bg-[#EEF3FF] px-2 py-0.5 rounded-md border border-[#DCE4FF]">
+              {displayStops.length} Stasiun
+            </span>
+          </div>
+
+          {/* Vertical Timeline */}
+          <div className="relative pl-6 space-y-3.5 before:absolute before:left-2.5 before:top-2.5 before:bottom-2.5 before:w-0.5 before:bg-slate-200">
+            {displayStops.map((stop, idx) => {
+              const isOrigin = idx === 0
+              const isTerminus = idx === displayStops.length - 1
+              const isLs = stop.dep === 'Ls' || stop.arr === 'Ls'
+              const stCode = cleanStCode(stop.st)
+              const stName = getStName(stop.st)
+
+              const arrTime = formatStopArrival(stop, isOrigin)
+              const depTime = formatStopDeparture(stop, isTerminus)
+
+              // Determine real-time state for this station
+              let isPassed = false
+              let isNext = false
+
+              if (state === 'selesai') {
+                isPassed = true
+              } else if (state === 'berjalan') {
+                if (nextStopIdx >= 0) {
+                  if (idx < nextStopIdx) isPassed = true
+                  else if (idx === nextStopIdx) isNext = true
+                }
+              }
+
+              // Calculate dwell duration if both arr and dep exist
+              let dwellMin = 0
+              if (!isOrigin && !isTerminus && !isLs && stop.dep_ms && stop.arr_ms && stop.dep_ms > stop.arr_ms) {
+                dwellMin = Math.round((stop.dep_ms - stop.arr_ms) / 60000)
+              }
+
+              return (
+                <div
+                  key={`${selectedTrain.id}-${stop.st}-${idx}`}
+                  className={`relative rounded-xl border p-3 transition-all ${
+                    isNext
+                      ? 'bg-blue-50/70 border-blue-400 shadow-sm ring-2 ring-blue-100'
+                      : isPassed
+                      ? 'bg-slate-50/80 border-slate-200 opacity-85'
+                      : 'bg-white border-slate-200 hover:border-blue-300'
+                  }`}
+                >
+                  {/* Timeline bullet on vertical line */}
+                  <div
+                    className={`absolute -left-[27px] top-3 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all ${
+                      isNext
+                        ? 'bg-[#4D6BFE] border-white ring-4 ring-[#4D6BFE]/30'
+                        : isPassed
+                        ? 'bg-slate-400 border-white text-white'
+                        : isOrigin
+                        ? 'bg-[#9333EA] border-white text-white'
+                        : isTerminus
+                        ? 'bg-red-500 border-white text-white'
+                        : 'bg-white border-slate-300'
+                    }`}
+                  >
+                    {isPassed ? (
+                      <Check size={9} strokeWidth={3} className="text-white" />
+                    ) : isNext ? (
+                      <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                    ) : isOrigin ? (
+                      <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                    ) : isTerminus ? (
+                      <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                    ) : (
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                    )}
+                  </div>
+
+                  {/* Header: Station Name + Badges */}
+                  <div className="flex items-start justify-between gap-2 mb-1.5">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-xs text-slate-900 truncate">{stName}</span>
+                        <span className="font-mono text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200">
+                          {stCode}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Status badge for stop */}
+                    <div className="shrink-0">
+                      {isOrigin ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                          Stasiun Awal
+                        </span>
+                      ) : isTerminus ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                          Tujuan Akhir
+                        </span>
+                      ) : isNext ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold bg-emerald-50 text-emerald-700 border border-emerald-300 animate-pulse">
+                          Stasiun Berikutnya
+                        </span>
+                      ) : isPassed ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold bg-slate-100 text-slate-500 border border-slate-200">
+                          Terlewati
+                        </span>
+                      ) : isLs ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                          Melintas Langsung (Ls)
+                        </span>
+                      ) : (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                          Berhenti
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Timetable row: Jam Sampai & Jam Berangkat */}
+                  <div className="grid grid-cols-2 gap-2 text-xs pt-1.5 border-t border-slate-100">
+                    <div className="flex items-center gap-1.5">
+                      <Clock size={11} className={isNext ? 'text-[#4D6BFE]' : 'text-slate-400'} />
+                      <div className="text-[11px]">
+                        <span className="text-slate-400 mr-1">Tiba:</span>
+                        <strong className={`font-mono ${isNext ? 'text-[#4D6BFE] font-bold' : 'text-slate-800'}`}>
+                          {arrTime}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-1.5 text-[11px]">
+                      <span className="text-slate-400">Berangkat:</span>
+                      <strong className="font-mono text-slate-700">{depTime}</strong>
+                    </div>
+                  </div>
+
+                  {/* Extra info: Stop duration & Pin on map link */}
+                  <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-100/70 text-[10px]">
+                    <div>
+                      {dwellMin > 0 ? (
+                        <span className="text-slate-500 font-medium">
+                          Berhenti <strong className="text-slate-700">{dwellMin} menit</strong>
+                        </span>
+                      ) : isLs ? (
+                        <span className="text-amber-600 font-medium">Tidak berhenti untuk penumpang</span>
+                      ) : (
+                        <span className="text-slate-400 font-medium">Transit Gapeka 2025</span>
+                      )}
+                    </div>
+
+                    {onFlyToStation && (
+                      <button
+                        type="button"
+                        onClick={() => onFlyToStation(stop.st)}
+                        className="inline-flex items-center gap-1 text-[#4D6BFE] hover:underline font-semibold cursor-pointer"
+                        title={`Lihat ${stName} di peta`}
+                      >
+                        <MapPin size={10} />
+                        <span>Lihat Stasiun</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
       </div>
     )
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // VIEW MODE 2: SEARCH & LIST KERETA
+  // ─────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-2.5">
-      {active.map((train) => {
-        const nextStop = getNextStop(train)
-        const nextStopName = nextStop ? (stMap.get(nextStop.st) ?? nextStop.st) : '—'
-        const etaNext = nextStop ? msToDuration(nextStop.arr_ms - now) : '—'
-        const duration = (train.arr_ms || 0) - (train.dep_ms || 0)
-        const progress = duration > 0
-          ? Math.min(100, Math.max(0, Math.round(((now - train.dep_ms) / duration) * 100)))
-          : 0
-        const fromName = stMap.get(train.from) ?? train.from
-        const toName = stMap.get(train.to) ?? train.to
-
-        return (
-          <div
-            key={train.id}
-            className="rounded-xl bg-white border border-slate-200 p-3.5 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer group shadow-sm"
+    <div className="space-y-3 pb-2">
+      {/* Search Bar Input */}
+      <div className="relative">
+        <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => {
+            setSearchQuery(e.target.value)
+            setVisibleLimit(25)
+          }}
+          placeholder="Cari kereta (Argo Bromo, 1012, Lin Bogor, Gambir)..."
+          className="w-full pl-9 pr-9 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-medium placeholder:text-slate-400 focus:outline-none focus:border-[#4D6BFE] focus:ring-2 focus:ring-[#4D6BFE]/20 shadow-xs transition-all"
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery('')}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-md cursor-pointer"
+            aria-label="Hapus pencarian"
           >
-            <div className="flex items-start justify-between mb-2.5">
-              <div className="min-w-0">
-                <div className="text-sm font-bold text-slate-900 group-hover:text-[#4D6BFE] transition-colors truncate">
-                  {train.name}
-                </div>
-                <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1 flex-wrap">
-                  <span>{train.code}</span>
-                  <span className="text-slate-300">·</span>
-                  <span className="truncate max-w-[120px]">{fromName} → {toName}</span>
-                </div>
-              </div>
-              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-300 shrink-0 ml-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Berjalan
-              </span>
-            </div>
+            <X size={14} />
+          </button>
+        )}
+      </div>
 
-            {/* Progress bar */}
-            <div className="mb-2.5">
-              <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
-                <div
-                  className="h-full bg-[#4D6BFE] rounded-full transition-all"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-              <div className="flex justify-between text-[10px] text-slate-400 mt-1">
-                <span>{fromName}</span>
-                <span>{progress}%</span>
-                <span>{toName}</span>
-              </div>
-            </div>
+      {/* Filter Category Pills */}
+      <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+        <button
+          type="button"
+          onClick={() => {
+            setFilterChip('all')
+            setVisibleLimit(25)
+          }}
+          className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+            filterChip === 'all'
+              ? 'bg-[#4D6BFE] text-white shadow-xs'
+              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+          }`}
+        >
+          Semua
+        </button>
 
-            <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100">
-              <div>
-                <span className="text-slate-400 text-[11px]">Pemberhentian Berikutnya</span>
-                <div className="font-semibold text-slate-800 mt-0.5">
-                  {nextStopName}{' '}
-                  <span className="text-[#4D6BFE] font-bold">({etaNext})</span>
+        <button
+          type="button"
+          onClick={() => {
+            setFilterChip('berjalan')
+            setVisibleLimit(25)
+          }}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+            filterChip === 'berjalan'
+              ? 'bg-emerald-600 text-white shadow-xs'
+              : 'bg-white text-slate-700 border border-slate-200 hover:bg-emerald-50/50'
+          }`}
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span>Berjalan ({totalActiveCount})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setFilterChip('commuter')
+            setVisibleLimit(25)
+          }}
+          className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+            filterChip === 'commuter'
+              ? 'bg-[#3B82F6] text-white shadow-xs'
+              : 'bg-white text-slate-600 border border-slate-200 hover:bg-blue-50/50'
+          }`}
+        >
+          Commuter Line
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setFilterChip('jarak-jauh')
+            setVisibleLimit(25)
+          }}
+          className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+            filterChip === 'jarak-jauh'
+              ? 'bg-[#9333EA] text-white shadow-xs'
+              : 'bg-white text-slate-600 border border-slate-200 hover:bg-purple-50/50'
+          }`}
+        >
+          Jarak Jauh
+        </button>
+      </div>
+
+      {/* Info count banner */}
+      <div className="flex items-center justify-between px-1 text-xs text-slate-500">
+        <span className="font-semibold text-slate-700">
+          {searchQuery ? `Hasil Pencarian (${filteredTrains.length})` : `Daftar Kereta (${filteredTrains.length})`}
+        </span>
+        <span className="text-[10px] text-slate-400">
+          Klik kereta untuk lihat rute stasiun & peta
+        </span>
+      </div>
+
+      {/* Train Cards List */}
+      {filteredTrains.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center bg-white space-y-2">
+          <Train size={28} className="mx-auto text-slate-300" />
+          <p className="text-sm font-semibold text-slate-700">Tidak ada kereta yang cocok</p>
+          <p className="text-xs text-slate-400 max-w-xs mx-auto">
+            Coba gunakan nama kereta lain (misal: "Argo", "Bogor", "KRL", "Taksaka") atau nomor KA.
+          </p>
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="mt-2 text-xs font-semibold text-[#4D6BFE] hover:underline cursor-pointer"
+            >
+              Reset pencarian
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          {filteredTrains.slice(0, visibleLimit).map((train) => {
+            const {
+              isCommuter,
+              isActive,
+              state,
+              totalDuration,
+              progress,
+              nextStopName,
+              nextStopEta,
+              stopsCount,
+            } = getTrainStatus(train)
+
+            const fromName = getStName(train.from)
+            const toName = getStName(train.to)
+
+            return (
+              <div
+                key={train.id}
+                onClick={() => handleSelectTrainCard(train)}
+                className="rounded-xl bg-white border border-slate-200 p-3.5 hover:border-blue-400 hover:shadow-md transition-all cursor-pointer group shadow-xs active:scale-[0.99] space-y-2.5"
+                title="Klik untuk berpindah ke lokasi kereta di peta dan melihat jadwal stasiun"
+              >
+                {/* Header: Title, Code, Status */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className={`text-[9.5px] px-1.5 py-0.2 rounded font-bold border ${
+                          isCommuter
+                            ? 'bg-blue-50 text-[#3B82F6] border-blue-200'
+                            : 'bg-purple-50 text-[#9333EA] border-purple-200'
+                        }`}
+                      >
+                        {isCommuter ? 'Commuter Line' : 'Jarak Jauh'}
+                      </span>
+                      <span className="text-[10px] font-mono font-semibold text-slate-500">
+                        KA {train.code}
+                      </span>
+                    </div>
+
+                    <div className="text-sm font-bold text-slate-900 group-hover:text-[#4D6BFE] transition-colors truncate mt-1">
+                      {train.name}
+                    </div>
+                  </div>
+
+                  {/* Status Indicator */}
+                  <div className="shrink-0">
+                    {state === 'berjalan' ? (
+                      <span className="inline-flex items-center gap-1 text-[9.5px] px-2 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-300">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Berjalan
+                      </span>
+                    ) : state === 'belum' ? (
+                      <span className="text-[9.5px] px-1.5 py-0.5 rounded font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                        Belum Berangkat
+                      </span>
+                    ) : (
+                      <span className="text-[9.5px] px-1.5 py-0.5 rounded font-semibold bg-slate-50 text-slate-500 border border-slate-200">
+                        Selesai
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Route Summary */}
+                <div className="flex items-center gap-1.5 text-xs text-slate-600 font-medium">
+                  <span className="truncate max-w-[110px] font-semibold text-slate-800">{fromName}</span>
+                  <ArrowRight size={12} className="text-slate-400 shrink-0" />
+                  <span className="truncate max-w-[110px] font-semibold text-slate-800">{toName}</span>
+                </div>
+
+                {/* Live Next Stop / Progress (if running) */}
+                {isActive && nextStopName && (
+                  <div className="pt-2 border-t border-slate-100 text-xs">
+                    <div className="flex items-center justify-between text-[11px] mb-1">
+                      <span className="text-slate-500 truncate max-w-[180px]">
+                        Menuju <strong className="text-slate-800">{nextStopName}</strong>
+                      </span>
+                      <span className="font-bold text-[#4D6BFE] shrink-0">
+                        {nextStopEta ? `~${nextStopEta}` : 'Segera'}
+                      </span>
+                    </div>
+                    <div className="h-1 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                      <div className="h-full bg-[#4D6BFE] rounded-full" style={{ width: `${progress}%` }} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Footer bar: Timing & Stops count */}
+                <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
+                  <div className="flex items-center gap-1 text-[11px]">
+                    <Clock size={11} className="text-slate-400" />
+                    <span className="font-mono font-semibold text-slate-800">{msToHHMM(train.dep_ms)}</span>
+                    <span className="text-slate-300">→</span>
+                    <span className="font-mono font-semibold text-slate-800">{msToHHMM(train.arr_ms)}</span>
+                    <span className="text-[10px] text-slate-400">({msToDuration(totalDuration)})</span>
+                  </div>
+
+                  <div className="flex items-center gap-1 text-[10px] text-[#4D6BFE] font-bold group-hover:translate-x-0.5 transition-transform">
+                    <span>{stopsCount} Stasiun</span>
+                    <ChevronRight size={12} />
+                  </div>
                 </div>
               </div>
-              <div className="text-right">
-                <span className="text-slate-400 text-[11px]">Tiba</span>
-                <div className="font-bold text-slate-800 mt-0.5">{msToHHMM(train.arr_ms)}</div>
-              </div>
-            </div>
-          </div>
-        )
-      })}
+            )
+          })}
+
+          {/* Load More Button */}
+          {filteredTrains.length > visibleLimit && (
+            <button
+              type="button"
+              onClick={() => setVisibleLimit((prev) => prev + 25)}
+              className="w-full py-2.5 bg-white border border-slate-200 hover:border-blue-300 hover:bg-[#EEF3FF] rounded-xl text-xs font-bold text-[#4D6BFE] shadow-xs cursor-pointer transition-all active:scale-[0.99]"
+            >
+              Tampilkan Lebih Banyak ({filteredTrains.length - visibleLimit} tersisa)
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -963,6 +1717,9 @@ export default function Sidebar({
   onTabChange,
   selectedJadwalStation,
   onSelectJadwalTrain,
+  selectedKeretaTrain,
+  onSelectKeretaTrain,
+  onFlyToStation,
   stations: propsStations,
   trains: propsTrains,
 }: SidebarProps) {
@@ -1124,6 +1881,9 @@ export default function Sidebar({
                 loading={loading}
                 error={error}
                 onRefresh={loadData}
+                selectedTrain={selectedKeretaTrain}
+                onSelectTrain={onSelectKeretaTrain}
+                onFlyToStation={onFlyToStation}
               />
             )}
           </PanelErrorBoundary>

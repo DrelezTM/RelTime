@@ -667,7 +667,8 @@ export default function MapView({
     const map = mapInstance.current
     if (!map) return
 
-    const targetStation = stations.find((s) => s.code.toLowerCase() === code.toLowerCase())
+    const clean = code.replace(/^_/, '').toLowerCase()
+    const targetStation = stations.find((s) => s.code.replace(/^_/, '').toLowerCase() === clean)
     if (!targetStation) return
 
     activePopupRef.current?.remove()
@@ -679,7 +680,9 @@ export default function MapView({
       essential: true,
     })
 
-    const markerObj = stationMarkersMapRef.current.get(targetStation.code.toLowerCase())
+    const markerObj =
+      stationMarkersMapRef.current.get(targetStation.code.toLowerCase()) ||
+      stationMarkersMapRef.current.get(clean)
     if (markerObj) {
       markerObj.popup.setLngLat([targetStation.lng, targetStation.lat]).addTo(map)
       activePopupRef.current = markerObj.popup
@@ -753,9 +756,10 @@ export default function MapView({
     })
     if (!targetTrain) return
 
-    const stMap = new Map(stations.map((s) => [s.code, s]))
-    const firstSt = stMap.get(targetTrain.stops?.[0]?.st || targetTrain.from)
-    const lastSt = stMap.get(targetTrain.to)
+    const cleanCode = (c?: string) => (c || '').replace(/^_/, '').toLowerCase()
+    const originCode = cleanCode(targetTrain.stops?.[0]?.st || targetTrain.from)
+    const firstSt = stations.find((s) => cleanCode(s.code) === originCode)
+    const lastSt = stations.find((s) => cleanCode(s.code) === cleanCode(targetTrain.to))
 
     if (firstSt) {
       map.flyTo({
