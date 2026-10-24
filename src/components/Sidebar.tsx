@@ -1,11 +1,12 @@
-import { useState, useEffect, Component, type ReactNode, type ErrorInfo } from 'react'
+import { useState, useEffect, useMemo, Component, type ReactNode, type ErrorInfo } from 'react'
 import {
   Map as MapIcon, Clock, Train, Compass, X, ArrowRight, Loader2, RefreshCw,
+  Search, MapPin, Navigation,
 } from 'lucide-react'
 import {
   fetchGapeka, fetchStations, clearApiCache,
   msToHHMM, msToDuration, nowMs,
-  type Train as TrainEntry, type Station,
+  type Train as TrainEntry, type Station, type TrainStop,
 } from '../api'
 
 type SidebarTab = 'maps' | 'jadwal' | 'kereta'
@@ -13,6 +14,12 @@ type SidebarTab = 'maps' | 'jadwal' | 'kereta'
 interface SidebarProps {
   isOpen: boolean
   onClose: () => void
+  activeTab?: SidebarTab
+  onTabChange?: (tab: SidebarTab) => void
+  selectedJadwalStation?: Station | null
+  onSelectJadwalTrain?: (train: TrainData) => void
+  stations?: Station[]
+  trains?: TrainData[]
 }
 
 type TrainData = TrainEntry
@@ -178,6 +185,117 @@ const MiniMapPanel = ({ stationCount, trains, loading }: MiniMapPanelProps) => {
   )
 }
 
+function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLon = ((lon2 - lon1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+    Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLon / 2) *
+    Math.sin(dLon / 2)
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return R * c
+}
+
+function formatDistance(km?: number): string {
+  if (km === undefined) return ''
+  if (km < 1) return `${Math.round(km * 1000)} m`
+  return `${km.toFixed(1)} km`
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a.length === 0) return b.length
+  if (b.length === 0) return a.length
+  const matrix: number[][] = []
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i]
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1]
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        )
+      }
+    }
+  }
+  return matrix[b.length][a.length]
+}
+
+interface ScoredStation {
+  station: Station
+  score: number
+  distanceKm?: number
+  trainCount: number
+}
+
+function scoreStation(
+  query: string,
+  st: Station,
+  userCoords: { lat: number; lng: number } | null,
+  trainCount: number
+): ScoredStation | null {
+  const q = query.trim().toLowerCase()
+  if (!q) return null
+
+  const qClean = q.replace(/[^a-z0-9]/g, '')
+  const code = st.code.toLowerCase().replace(/^_/, '')
+  const name = st.name.toLowerCase()
+  const nameClean = name.replace(/[^a-z0-9]/g, '')
+
+  let score = 0
+
+  if (code === q || code === qClean) {
+    score = 1000
+  } else if (name === q || nameClean === qClean) {
+    score = 900
+  } else if (code.startsWith(q) || code.startsWith(qClean)) {
+    score = 750
+  } else if (name.startsWith(q) || nameClean.startsWith(qClean)) {
+    score = 650
+  } else if (name.split(/\s+/).some((w) => w.startsWith(q))) {
+    score = 550
+  } else if (name.includes(q) || nameClean.includes(qClean)) {
+    score = 400
+  } else if (code.includes(q)) {
+    score = 300
+  } else if (
+    (q === 'jogja' || q === 'yogyakarta') &&
+    (code === 'yk' || name.includes('tugu') || name.includes('yogyakarta'))
+  ) {
+    score = 850
+  } else if (
+    (q === 'solo' || q === 'surakarta') &&
+    (code === 'slo' || name.includes('balapan') || name.includes('solo'))
+  ) {
+    score = 850
+  } else if (q.length >= 4) {
+    const lev = levenshteinDistance(q, name)
+    if (lev <= 2) {
+      score = 250 - lev * 40
+    }
+  }
+
+  if (score <= 0) return null
+
+  let distanceKm: number | undefined
+  if (userCoords && st.lat && st.lng) {
+    distanceKm = getDistanceKm(userCoords.lat, userCoords.lng, st.lat, st.lng)
+  }
+
+  return {
+    station: st,
+    score,
+    distanceKm,
+    trainCount,
+  }
+}
+
 // ── Schedule panel ───────────────────────────────────────────────
 interface JadwalPanelProps {
   trains: TrainData[]
@@ -185,9 +303,42 @@ interface JadwalPanelProps {
   loading: boolean
   error: string | null
   onRefresh: () => void
+  initialStation?: Station | null
+  onSelectTrain?: (train: TrainData) => void
 }
 
-const JadwalPanel = ({ trains, stations, loading, error, onRefresh }: JadwalPanelProps) => {
+const JadwalPanel = ({
+  trains,
+  stations,
+  loading,
+  error,
+  onRefresh,
+  initialStation,
+  onSelectTrain,
+}: JadwalPanelProps) => {
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedStation, setSelectedStation] = useState<Station | null>(null)
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null)
+
+  // Sync initialStation when opened from station popup
+  useEffect(() => {
+    if (initialStation) {
+      setSelectedStation(initialStation)
+      setSearchQuery(initialStation.name)
+    }
+  }, [initialStation])
+
+  // Try silent geolocation once to display station distance
+  useEffect(() => {
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setUserCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => {},
+        { timeout: 5000 }
+      )
+    }
+  }, [])
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-slate-500 gap-3">
@@ -217,75 +368,452 @@ const JadwalPanel = ({ trains, stations, loading, error, onRefresh }: JadwalPane
   const stMap = new Map(safeStations.map((s) => [s.code, s.name]))
   const now = nowMs()
 
-  // Get next 20 departures across all trains, from the current time, wrapping around midnight
-  const upcoming = safeTrains
-    .flatMap((train) => {
-      const stops = Array.isArray(train?.stops) ? train.stops : []
-      return stops
-        .filter((stop) => stop && !stop.inv && stop.dep !== null && stop.dep !== 'Ls')
-        .map((stop) => {
-          const diffMs = (stop.dep_ms - now + 86400000) % 86400000
-          return { train, stop, diffMs }
-        })
-    })
-    .sort((a, b) => a.diffMs - b.diffMs)
-    .slice(0, 20)
+  // Calculate train counts per station
+  const stationTrainCountMap = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const tr of safeTrains) {
+      if (!Array.isArray(tr.stops)) continue
+      for (const stp of tr.stops) {
+        if (!stp || stp.inv) continue
+        const code = stp.st.replace(/^_/, '').toUpperCase()
+        map.set(code, (map.get(code) || 0) + 1)
+      }
+    }
+    return map
+  }, [safeTrains])
 
-  if (upcoming.length === 0) {
-    return (
-      <div className="text-center py-10 text-sm text-slate-500">
-        Tidak ada kereta berangkat dalam waktu dekat.
-      </div>
-    )
-  }
+  // Top matching stations for search query, ordered by match relevance & distance
+  const matchedStations = useMemo(() => {
+    const q = searchQuery.trim()
+    if (!q) return []
+
+    const scored: ScoredStation[] = []
+    const seenCodes = new Set<string>()
+
+    for (const st of safeStations) {
+      if (!st || !st.code || st.code.startsWith('_')) continue
+      const cleanCode = st.code.replace(/^_/, '').toUpperCase()
+      if (seenCodes.has(cleanCode)) continue
+
+      const count = stationTrainCountMap.get(cleanCode) || 0
+      const res = scoreStation(q, st, userCoords, count)
+      if (res) {
+        seenCodes.add(cleanCode)
+        scored.push(res)
+      }
+    }
+
+    scored.sort((a, b) => {
+      if (Math.abs(b.score - a.score) > 120) {
+        return b.score - a.score
+      }
+      if (a.distanceKm !== undefined && b.distanceKm !== undefined) {
+        if (Math.abs(a.distanceKm - b.distanceKm) > 10) {
+          return a.distanceKm - b.distanceKm
+        }
+      }
+      if (b.trainCount !== a.trainCount) {
+        return b.trainCount - a.trainCount
+      }
+      return b.score - a.score
+    })
+
+    return scored.slice(0, 5)
+  }, [searchQuery, safeStations, stationTrainCountMap, userCoords])
+
+  // Active station: explicit selection or top match
+  const activeStation = selectedStation || (matchedStations.length > 0 ? matchedStations[0].station : null)
+
+  // Trains passing through or stopping at activeStation
+  const stationSchedule = useMemo(() => {
+    if (!activeStation) return []
+    const targetCode = activeStation.code.replace(/^_/, '').toUpperCase()
+
+    const list: Array<{
+      train: TrainData
+      stop: TrainStop
+      toName: string
+      fromName: string
+      isPassingThrough: boolean
+      isTerminating: boolean
+      isOriginating: boolean
+      depLabel: string
+      arrLabel: string
+      timeLabel: string
+      diffMs: number
+      diffText: string
+      isCommuter: boolean
+    }> = []
+
+    for (const train of safeTrains) {
+      if (!train || !Array.isArray(train.stops)) continue
+      const stopIndex = train.stops.findIndex(
+        (s) => s && s.st.replace(/^_/, '').toUpperCase() === targetCode && !s.inv
+      )
+      if (stopIndex === -1) continue
+
+      const stop = train.stops[stopIndex]
+      const isOriginating = stopIndex === 0 || train.from.replace(/^_/, '').toUpperCase() === targetCode
+      const isTerminating = stopIndex === train.stops.length - 1 || train.to.replace(/^_/, '').toUpperCase() === targetCode
+      const isPassingThrough = stop.dep === 'Ls' || stop.arr === 'Ls'
+
+      let targetMs = stop.dep_ms
+      if (isTerminating && stop.arr_ms) {
+        targetMs = stop.arr_ms
+      } else if (!targetMs && stop.arr_ms) {
+        targetMs = stop.arr_ms
+      }
+
+      const diffMs = (targetMs - now + 86400000) % 86400000
+      const diffMin = Math.round(diffMs / 60000)
+      const diffText =
+        diffMin <= 1 ? 'Segera' : diffMin < 60 ? `${diffMin} mnt` : `${Math.floor(diffMin / 60)} j ${diffMin % 60} mnt`
+
+      const depLabel = stop.dep && stop.dep !== 'Ls' && stop.dep_ms ? msToHHMM(stop.dep_ms) : ''
+      const arrLabel = stop.arr && stop.arr !== 'Ls' && stop.arr_ms ? msToHHMM(stop.arr_ms) : ''
+
+      let timeLabel = ''
+      if (isPassingThrough) {
+        timeLabel = `Melintas ~${msToHHMM(targetMs)} (Ls)`
+      } else if (isTerminating) {
+        timeLabel = `Tiba ${arrLabel || msToHHMM(targetMs)} (Akhir)`
+      } else if (isOriginating) {
+        timeLabel = `Berangkat ${depLabel || msToHHMM(targetMs)} (Awal)`
+      } else if (arrLabel && depLabel && arrLabel !== depLabel) {
+        timeLabel = `Tiba ${arrLabel} • Berangkat ${depLabel}`
+      } else {
+        timeLabel = `Berangkat ${depLabel || arrLabel || msToHHMM(targetMs)}`
+      }
+
+      const isCommuter =
+        /commuter|krl|lin|feeder|prameks|bandara/i.test(train.name) ||
+        /commuter|krl|lin/i.test(train.code)
+
+      const toName = stMap.get(train.to) ?? train.to
+      const fromName = stMap.get(train.from) ?? train.from
+
+      list.push({
+        train,
+        stop,
+        toName,
+        fromName,
+        isPassingThrough,
+        isTerminating,
+        isOriginating,
+        depLabel,
+        arrLabel,
+        timeLabel,
+        diffMs,
+        diffText,
+        isCommuter,
+      })
+    }
+
+    return list.sort((a, b) => a.diffMs - b.diffMs)
+  }, [activeStation, safeTrains, now, stMap])
+
+  // Default upcoming 20 departures across all trains (when search bar is empty)
+  const defaultUpcoming = useMemo(() => {
+    return safeTrains
+      .flatMap((train) => {
+        const stops = Array.isArray(train?.stops) ? train.stops : []
+        return stops
+          .filter((stop) => stop && !stop.inv && stop.dep !== null && stop.dep !== 'Ls')
+          .map((stop) => {
+            const diffMs = (stop.dep_ms - now + 86400000) % 86400000
+            return { train, stop, diffMs }
+          })
+      })
+      .sort((a, b) => a.diffMs - b.diffMs)
+      .slice(0, 20)
+  }, [safeTrains, now])
+
+  const isSearchActive = searchQuery.trim().length > 0
 
   return (
-    <div className="space-y-2.5">
-      {upcoming.map(({ train, stop, diffMs }, i) => {
-        const toName = stMap.get(train.to) ?? train.to
-        const fromName = stMap.get(stop.st) ?? stop.st
-        const depLabel = msToHHMM(stop.dep_ms)
-        const arrLabel = msToHHMM(train.arr_ms)
-        const dur = msToDuration((train.arr_ms - stop.dep_ms + 86400000) % 86400000)
-        const diffMin = Math.round(diffMs / 60000)
-        const diffText = diffMin <= 1 ? 'Segera' : diffMin < 60 ? `${diffMin} mnt` : `${Math.floor(diffMin / 60)} j ${diffMin % 60} mnt`
-
-        return (
-          <div
-            key={`${train.id}-${stop.st}-${i}`}
-            className="rounded-xl bg-white border border-slate-200 p-3.5 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer group shadow-sm"
+    <div className="space-y-3">
+      {/* ── Station Search Bar ── */}
+      <div className="relative">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => {
+            setSearchQuery(e.target.value)
+            setSelectedStation(null)
+          }}
+          placeholder="Cari stasiun (cth: Manggarai, Gambir, MRI)..."
+          className="w-full pl-9 pr-8 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-medium placeholder:text-slate-400 text-slate-900 shadow-xs focus:outline-none focus:border-[#4D6BFE] focus:ring-2 focus:ring-blue-100 transition-all"
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery('')
+              setSelectedStation(null)
+            }}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-100 cursor-pointer transition-colors"
+            title="Hapus pencarian"
           >
-            <div className="flex items-start justify-between mb-2">
-              <div>
-                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
-                  <span className="truncate max-w-[90px]">{fromName}</span>
-                  <ArrowRight size={11} className="text-slate-400 shrink-0" />
-                  <span className="truncate max-w-[90px]">{toName}</span>
-                </div>
-                <div className="text-[11px] text-slate-500 mt-0.5 font-medium">
-                  {train.name} · {train.code}
-                </div>
-              </div>
-              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-300 shrink-0">
-                {diffText}
-              </span>
-            </div>
+            <X size={14} />
+          </button>
+        )}
+      </div>
 
-            <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
-              <div className="flex items-center gap-2">
-                <Clock size={11} className="text-slate-400" />
-                <span className="font-semibold text-slate-800">{depLabel}</span>
-                <span className="text-slate-300">→</span>
-                <span className="text-slate-600">{arrLabel}</span>
-                <span className="text-slate-400">({dur})</span>
+      {/* ── Mode 1: Search Active ── */}
+      {isSearchActive ? (
+        <div className="space-y-3">
+          {/* List of matching stations */}
+          {matchedStations.length > 0 ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-wider px-1">
+                <span>Stasiun Terdekat / Cocok</span>
+                <span className="text-slate-400 font-semibold">{matchedStations.length} ditemukan</span>
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#EEF3FF] text-[#4D6BFE] font-semibold border border-blue-100">
-                {stop.st}
-              </span>
+              <div className="flex flex-col gap-1.5">
+                {matchedStations.map((item) => {
+                  const st = item.station
+                  const isSelected = activeStation?.code === st.code
+                  const distStr = item.distanceKm !== undefined ? formatDistance(item.distanceKm) : ''
+                  return (
+                    <button
+                      key={st.code}
+                      type="button"
+                      onClick={() => setSelectedStation(st)}
+                      className={`
+                        w-full flex items-center justify-between p-2.5 rounded-xl text-left transition-all cursor-pointer
+                        ${isSelected
+                          ? 'bg-blue-50/90 border-2 border-[#4D6BFE] shadow-xs'
+                          : 'bg-white border border-slate-200 hover:border-blue-300 hover:bg-slate-50/80 shadow-xs'
+                        }
+                      `}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div
+                          className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                            isSelected
+                              ? 'bg-[#4D6BFE] text-white'
+                              : 'bg-pink-50 text-[#EC4899] border border-pink-200'
+                          }`}
+                        >
+                          <MapPin size={15} />
+                        </div>
+                        <div className="truncate">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-slate-900 truncate">{st.name}</span>
+                            <span className="text-[10px] font-bold font-mono px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                              {st.code}
+                            </span>
+                          </div>
+                          <div className="text-[10.5px] text-slate-500 mt-0.5 flex items-center gap-1">
+                            <span>{item.trainCount > 0 ? `${item.trainCount} kereta melewati` : 'Stasiun rel'}</span>
+                            {distStr && (
+                              <>
+                                <span>•</span>
+                                <span className="font-semibold text-slate-600">{distStr}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="shrink-0 ml-2">
+                        {isSelected ? (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#4D6BFE] text-white">
+                            Dipilih
+                          </span>
+                        ) : (
+                          <span className="text-[10.5px] font-semibold text-slate-400">
+                            Lihat →
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
             </div>
+          ) : (
+            <div className="text-center py-7 px-4 rounded-xl bg-white border border-slate-200 text-slate-500 shadow-xs">
+              <div className="w-9 h-9 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-2">
+                <MapPin size={18} />
+              </div>
+              <p className="text-xs font-bold text-slate-800">Stasiun tidak ditemukan</p>
+              <p className="text-[11px] text-slate-400 mt-1 max-w-[260px] mx-auto">
+                Tidak ada stasiun yang cocok dengan "{searchQuery}". Coba ketik nama stasiun atau kode stasiun.
+              </p>
+            </div>
+          )}
+
+          {/* Schedule results for the active station */}
+          {activeStation && (
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between px-1">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Clock size={13} className="text-[#4D6BFE] shrink-0" />
+                  <span className="text-xs font-bold text-slate-800 truncate">
+                    Jadwal Melewati {activeStation.name}
+                  </span>
+                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EEF3FF] text-[#4D6BFE] border border-blue-200 shrink-0">
+                  {stationSchedule.length} Kereta
+                </span>
+              </div>
+
+              {stationSchedule.length === 0 ? (
+                <div className="text-center py-8 rounded-xl bg-white border border-slate-200 p-4 text-xs text-slate-500 shadow-xs">
+                  Tidak ada jadwal kereta yang melewati Stasiun {activeStation.name} saat ini.
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {stationSchedule.map(
+                    (
+                      {
+                        train,
+                        stop,
+                        toName,
+                        fromName,
+                        isPassingThrough,
+                        isTerminating,
+                        isOriginating,
+                        timeLabel,
+                        diffText,
+                        isCommuter,
+                      },
+                      i
+                    ) => (
+                      <div
+                        key={`${train.id}-${stop.st}-${i}`}
+                        onClick={() => onSelectTrain?.(train)}
+                        className="rounded-xl bg-white border border-slate-200 p-3.5 hover:border-blue-400 hover:shadow-md transition-all shadow-xs cursor-pointer group active:scale-[0.99]"
+                        title="Klik untuk pusatkan posisi kereta di peta"
+                      >
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="min-w-0 pr-2">
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                              <span className="truncate max-w-[100px]">{fromName}</span>
+                              <ArrowRight size={11} className="text-slate-400 shrink-0" />
+                              <span className="truncate max-w-[100px]">{toName}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 mt-0.5 font-medium flex items-center gap-1.5">
+                              <span className="truncate">{train.name}</span>
+                              <span>·</span>
+                              <span className="font-mono text-slate-600 font-semibold">{train.code}</span>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end gap-1 shrink-0">
+                            <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-300">
+                              {diffText}
+                            </span>
+                            {isPassingThrough ? (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                Langsung (Ls)
+                              </span>
+                            ) : isTerminating ? (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                                Tujuan Akhir
+                              </span>
+                            ) : isOriginating ? (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                                Keberangkatan Awal
+                              </span>
+                            ) : (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold bg-slate-50 text-slate-600 border border-slate-200">
+                                Berhenti
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
+                          <div className="flex items-center gap-1.5">
+                            <Clock size={11} className="text-slate-400 shrink-0" />
+                            <span className="font-semibold text-slate-800 text-[11px]">{timeLabel}</span>
+                          </div>
+                          <span
+                            className={`text-[9.5px] px-2 py-0.5 rounded-full font-semibold border ${
+                              isCommuter
+                                ? 'bg-blue-50 text-[#3B82F6] border-blue-200'
+                                : 'bg-purple-50 text-[#9333EA] border-purple-200'
+                            }`}
+                          >
+                            {isCommuter ? 'Commuter Line' : 'Jarak Jauh'}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        /* ── Mode 2: Search Empty (Default 20 upcoming departures) ── */
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between px-1 pb-0.5">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+              <Clock size={13} className="text-[#4D6BFE]" />
+              <span>Jadwal Keberangkatan Terdekat</span>
+            </div>
+            <span className="text-[10px] font-semibold text-slate-400">Semua Stasiun</span>
           </div>
-        )
-      })}
+
+          {defaultUpcoming.length === 0 ? (
+            <div className="text-center py-10 text-sm text-slate-500">
+              Tidak ada kereta berangkat dalam waktu dekat.
+            </div>
+          ) : (
+            defaultUpcoming.map(({ train, stop, diffMs }, i) => {
+              const toName = stMap.get(train.to) ?? train.to
+              const fromName = stMap.get(stop.st) ?? stop.st
+              const depLabel = msToHHMM(stop.dep_ms)
+              const arrLabel = msToHHMM(train.arr_ms)
+              const dur = msToDuration((train.arr_ms - stop.dep_ms + 86400000) % 86400000)
+              const diffMin = Math.round(diffMs / 60000)
+              const diffText =
+                diffMin <= 1 ? 'Segera' : diffMin < 60 ? `${diffMin} mnt` : `${Math.floor(diffMin / 60)} j ${diffMin % 60} mnt`
+
+              return (
+                <div
+                  key={`${train.id}-${stop.st}-${i}`}
+                  onClick={() => onSelectTrain?.(train)}
+                  className="rounded-xl bg-white border border-slate-200 p-3.5 hover:border-blue-400 hover:shadow-md transition-all cursor-pointer group shadow-xs active:scale-[0.99]"
+                  title="Klik untuk pusatkan posisi kereta di peta"
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                        <span className="truncate max-w-[90px]">{fromName}</span>
+                        <ArrowRight size={11} className="text-slate-400 shrink-0" />
+                        <span className="truncate max-w-[90px]">{toName}</span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5 font-medium">
+                        {train.name} · {train.code}
+                      </div>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-300 shrink-0">
+                      {diffText}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <Clock size={11} className="text-slate-400" />
+                      <span className="font-semibold text-slate-800">{depLabel}</span>
+                      <span className="text-slate-300">→</span>
+                      <span className="text-slate-600">{arrLabel}</span>
+                      <span className="text-slate-400">({dur})</span>
+                    </div>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#EEF3FF] text-[#4D6BFE] font-semibold border border-blue-100">
+                      {stop.st}
+                    </span>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -428,10 +956,33 @@ const KeretaPanel = ({ trains, stations, loading, error, onRefresh }: KeretaPane
 }
 
 // ── Main Sidebar export ──────────────────────────────────────────
-export default function Sidebar({ isOpen, onClose }: SidebarProps) {
-  const [activeTab, setActiveTab] = useState<SidebarTab>('maps')
-  const [trains, setTrains] = useState<TrainData[]>([])
-  const [stations, setStations] = useState<Station[]>([])
+export default function Sidebar({
+  isOpen,
+  onClose,
+  activeTab: controlledTab,
+  onTabChange,
+  selectedJadwalStation,
+  onSelectJadwalTrain,
+  stations: propsStations,
+  trains: propsTrains,
+}: SidebarProps) {
+  const [internalTab, setInternalTab] = useState<SidebarTab>('maps')
+  const activeTab = controlledTab ?? internalTab
+  const setActiveTab = (tab: SidebarTab) => {
+    setInternalTab(tab)
+    onTabChange?.(tab)
+  }
+
+  const [trains, setTrains] = useState<TrainData[]>(propsTrains || [])
+  const [stations, setStations] = useState<Station[]>(propsStations || [])
+
+  useEffect(() => {
+    if (propsTrains && propsTrains.length > 0) setTrains(propsTrains)
+  }, [propsTrains])
+
+  useEffect(() => {
+    if (propsStations && propsStations.length > 0) setStations(propsStations)
+  }, [propsStations])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
@@ -559,9 +1110,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               <JadwalPanel
                 trains={trains}
                 stations={stations}
-                loading={loading}
+                loading={loading && trains.length === 0}
                 error={error}
                 onRefresh={loadData}
+                initialStation={selectedJadwalStation}
+                onSelectTrain={onSelectJadwalTrain}
               />
             )}
             {activeTab === 'kereta' && (

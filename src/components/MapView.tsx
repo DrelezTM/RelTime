@@ -24,6 +24,7 @@ interface MapViewProps {
   onRegisterRetry?: (retryFn: () => void) => void
   onDataLoaded?: (stations: Station[], trains: Train[]) => void
   mapControllerRef?: React.MutableRefObject<MapController | null>
+  onViewStationSchedule?: (station: Station) => void
 }
 
 type MapLayerMode = 'streets' | 'satellite'
@@ -298,11 +299,24 @@ function createStationPopupHTML(station: Station): string {
           <strong style="color:${textColor};font-family:monospace;">${station.lng.toFixed(6)}</strong>
         </div>
       </div>
+      <button
+        type="button"
+        id="btn-station-view-schedule"
+        class="view-station-schedule-btn"
+        data-station-code="${station.code}"
+        style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:8px;padding:6px 10px;border-radius:8px;background:#4D6BFE;border:none;color:#ffffff;font-size:11px;font-weight:700;cursor:pointer;box-shadow:0 2px 6px rgba(77,107,254,0.3);font-family:inherit;transition:background 0.15s ease;"
+        onmouseover="this.style.background='#3B5BFE'"
+        onmouseout="this.style.background='#4D6BFE'"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span>Lihat Jadwal</span>
+      </button>
       <a
+        id="link-station-google-maps"
         href="https://www.google.com/maps/search/?api=1&query=${station.lat},${station.lng}"
         target="_blank"
         rel="noopener noreferrer"
-        style="display:flex;align-items:center;justify-content:center;gap:5px;margin-top:8px;padding:5px 8px;border-radius:8px;background:${linkBg};border:1px solid ${linkBorder};color:${linkText};font-size:10.5px;font-weight:700;text-decoration:none;cursor:pointer;"
+        style="display:flex;align-items:center;justify-content:center;gap:5px;margin-top:5px;padding:5px 8px;border-radius:8px;background:${linkBg};border:1px solid ${linkBorder};color:${linkText};font-size:10.5px;font-weight:700;text-decoration:none;cursor:pointer;"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         <span>Buka di Google Maps</span>
@@ -391,6 +405,7 @@ export default function MapView({
   onRegisterRetry,
   onDataLoaded,
   mapControllerRef,
+  onViewStationSchedule,
 }: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstance = useRef<maplibregl.Map | null>(null)
@@ -413,6 +428,32 @@ export default function MapView({
   const [userCoords, setUserCoords] = useState<{ lng: number; lat: number; accuracy?: number } | null>(null)
   const [hasLocation, setHasLocation] = useState(false)
   const [isLocating, setIsLocating] = useState(false)
+
+  // Catch clicks on "Lihat Jadwal" button inside station popups
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent) => {
+      const btn = (e.target as HTMLElement).closest('.view-station-schedule-btn') as HTMLElement | null
+      if (btn) {
+        e.preventDefault()
+        e.stopPropagation()
+        const code = btn.getAttribute('data-station-code')
+        if (code) {
+          const cleanCode = code.replace(/^_/, '').toLowerCase()
+          const targetStation =
+            stations.find((s) => s.code.replace(/^_/, '').toLowerCase() === cleanCode) ||
+            stationMarkersMapRef.current.get(code.toLowerCase())?.station
+          if (targetStation && onViewStationSchedule) {
+            activePopupRef.current?.remove()
+            document.querySelectorAll('.maplibregl-popup').forEach((p) => p.remove())
+            onViewStationSchedule(targetStation)
+          }
+        }
+      }
+    }
+
+    document.addEventListener('click', handleDocumentClick, true)
+    return () => document.removeEventListener('click', handleDocumentClick, true)
+  }, [stations, onViewStationSchedule])
 
   const loadData = useCallback((forceRefresh = false) => {
     if (forceRefresh) clearApiCache()
@@ -970,13 +1011,6 @@ export default function MapView({
       userMarkerRef.current = null
     }
   }, [updateUserMarker, startWatchingLocation, removeUserMarker])
-
-  // If mapReady triggers and userCoords is known, re-sync marker
-  useEffect(() => {
-    if (mapReady && userCoords) {
-      updateUserMarker(userCoords.lng, userCoords.lat, userCoords.accuracy)
-    }
-  }, [mapReady, userCoords, updateUserMarker])
 
   useEffect(() => {
     if (mapControllerRef) {

@@ -9,6 +9,8 @@ export default function App() {
   const [search, setSearch] = useState('')
   const [activeFilters, setActiveFilters] = useState<FilterType[]>(['stasiun', 'commuter', 'jarak-jauh'])
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarTab, setSidebarTab] = useState<'maps' | 'jadwal' | 'kereta'>('maps')
+  const [selectedJadwalStation, setSelectedJadwalStation] = useState<Station | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [stations, setStations] = useState<Station[]>([])
   const [trains, setTrains] = useState<Train[]>([])
@@ -53,6 +55,27 @@ export default function App() {
     }
   }, [])
 
+  const handleViewStationSchedule = useCallback((station: Station) => {
+    setSelectedJadwalStation(station)
+    setSidebarTab('jadwal')
+    setSidebarOpen(true)
+  }, [])
+
+  const handleSelectJadwalTrain = useCallback((train: Train) => {
+    // 1. Ensure appropriate train filter is active so user sees the marker on the map
+    const isCommuter =
+      /commuter|krl|lin|feeder|prameks|bandara/i.test(train.name) ||
+      /commuter|krl|lin/i.test(train.code)
+    const filterType: FilterType = isCommuter ? 'commuter' : 'jarak-jauh'
+    setActiveFilters((prev) => (prev.includes(filterType) ? prev : [...prev, filterType]))
+
+    // 2. Direct map to that train's marker position
+    mapControllerRef.current?.flyToTrain(train.code, train.id, train.name)
+
+    // 3. Close sidebar so user immediately sees the focused train on the map
+    setSidebarOpen(false)
+  }, [])
+
   const getMapCenter = useCallback((): [number, number] | null => {
     return mapControllerRef.current?.getCenter() || null
   }, [])
@@ -67,6 +90,7 @@ export default function App() {
           onRegisterRetry={handleRegisterRetry}
           onDataLoaded={handleDataLoaded}
           mapControllerRef={mapControllerRef}
+          onViewStationSchedule={handleViewStationSchedule}
         />
       </div>
 
@@ -128,6 +152,12 @@ export default function App() {
       <Sidebar
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        activeTab={sidebarTab}
+        onTabChange={setSidebarTab}
+        selectedJadwalStation={selectedJadwalStation}
+        onSelectJadwalTrain={handleSelectJadwalTrain}
+        stations={stations}
+        trains={trains}
       />
     </div>
   )
