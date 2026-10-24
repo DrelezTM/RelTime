@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { Layers, Loader2, Globe } from 'lucide-react'
+import { Layers, Loader2, Globe, Locate, LocateFixed } from 'lucide-react'
 import {
   fetchStations, fetchRoutes, fetchGapeka, clearApiCache,
   nowMs, msToDuration, msToHHMM,
@@ -15,6 +15,7 @@ export interface MapController {
   flyToTrain: (trainCode: string, trainId?: number, trainName?: string) => void
   flyToCoordinates: (lng: number, lat: number, zoom?: number) => void
   getCenter: () => [number, number] | null
+  flyToUser?: () => void
 }
 
 interface MapViewProps {
@@ -347,6 +348,43 @@ function createTrainPopupHTML(
   `
 }
 
+function createUserPopupHTML(lng: number, lat: number, accuracy?: number): string {
+  const accText = typeof accuracy === 'number' && accuracy > 0
+    ? `<span style="font-size:9.5px;color:#2563EB;font-weight:700;background:#DBEAFE;padding:2px 7px;border-radius:999px;">±${Math.round(accuracy)} m</span>`
+    : ''
+
+  return `
+    <div style="background:#ffffff;border-radius:14px;padding:14px 16px;font-family:'Plus Jakarta Sans',sans-serif;min-width:240px;max-width:290px;color:#0F172A;box-shadow:0 12px 28px rgba(0,0,0,0.16);border:1px solid rgba(0,0,0,0.08);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:8px;">
+        <span style="font-size:9.5px;font-weight:800;text-transform:uppercase;color:#1D4ED8;background:#EFF6FF;padding:3px 8px;border-radius:999px;border:1px solid #BFDBFE;display:inline-flex;align-items:center;gap:4px;">
+          <span style="width:6px;height:6px;border-radius:50%;background:#2563EB;display:inline-block;"></span>
+          Lokasi Anda
+        </span>
+        ${accText}
+      </div>
+      <div style="font-size:13.5px;font-weight:800;color:#0F172A;margin-bottom:8px;">
+        Posisi Anda
+      </div>
+      <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:8px 10px;margin-bottom:10px;display:flex;flex-direction:column;gap:5px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;">
+          <span style="color:#64748B;font-weight:600;">Latitude:</span>
+          <strong style="color:#0F172A;font-family:monospace;font-size:12px;font-weight:700;">${lat.toFixed(6)}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;">
+          <span style="color:#64748B;font-weight:600;">Longitude:</span>
+          <strong style="color:#0F172A;font-family:monospace;font-size:12px;font-weight:700;">${lng.toFixed(6)}</strong>
+        </div>
+      </div>
+      <div style="font-size:10px;color:#475569;background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:8px 10px;line-height:1.45;">
+        <div style="display:flex;align-items:flex-start;gap:6px;">
+          <span style="font-weight:800;color:#D97706;font-size:12px;line-height:1;">⚠️</span>
+          <span><strong style="color:#B45309;">Catatan:</strong> Akurasi lokasi mengandalkan GPS & sinyal perangkat, sehingga posisi yang ditampilkan merupakan perkiraan (dapat memiliki deviasi atau ketidakakuratan).</span>
+        </div>
+      </div>
+    </div>
+  `
+}
+
 export default function MapView({
   activeFilters,
   onError,
@@ -363,12 +401,18 @@ export default function MapView({
   const activePopupRef = useRef<maplibregl.Popup | null>(null)
   const routesDataRef = useRef<Route[]>([])
   const isInitialMount = useRef(true)
+  const userMarkerRef = useRef<maplibregl.Marker | null>(null)
+  const userPopupRef = useRef<maplibregl.Popup | null>(null)
+  const watchIdRef = useRef<number | null>(null)
 
   const [layerMode, setLayerMode] = useState<MapLayerMode>('streets')
   const [stations, setStations] = useState<Station[]>([])
   const [trains, setTrains] = useState<Train[]>([])
   const [loading, setLoading] = useState(true)
   const [mapReady, setMapReady] = useState(false)
+  const [userCoords, setUserCoords] = useState<{ lng: number; lat: number; accuracy?: number } | null>(null)
+  const [hasLocation, setHasLocation] = useState(false)
+  const [isLocating, setIsLocating] = useState(false)
 
   const loadData = useCallback((forceRefresh = false) => {
     if (forceRefresh) clearApiCache()
@@ -414,8 +458,8 @@ export default function MapView({
       zoom: 9.5,
     })
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'bottom-right')
-    map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right')
+    map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'top-left')
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-left')
 
     mapInstance.current = map
 
@@ -741,6 +785,199 @@ export default function MapView({
     return [c.lng, c.lat]
   }, [])
 
+  const removeUserMarker = useCallback(() => {
+    if (userPopupRef.current) {
+      userPopupRef.current.remove()
+      userPopupRef.current = null
+    }
+    if (userMarkerRef.current) {
+      userMarkerRef.current.remove()
+      userMarkerRef.current = null
+    }
+    setUserCoords(null)
+    setHasLocation(false)
+  }, [])
+
+  const updateUserMarker = useCallback((lng: number, lat: number, accuracy?: number) => {
+    const map = mapInstance.current
+    if (!map) return
+
+    const popupHTML = createUserPopupHTML(lng, lat, accuracy)
+
+    if (!userMarkerRef.current) {
+      const el = document.createElement('div')
+      el.className = 'user-location-marker'
+      el.title = 'Lokasi Anda (klik untuk detail koordinat)'
+
+      const halo = document.createElement('div')
+      halo.className = 'user-location-halo'
+
+      const dot = document.createElement('div')
+      dot.className = 'user-location-dot'
+
+      el.appendChild(halo)
+      el.appendChild(dot)
+
+      const popup = new maplibregl.Popup({ offset: [0, -14], closeButton: true }).setHTML(popupHTML)
+      userPopupRef.current = popup
+
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([lng, lat])
+        .setPopup(popup)
+        .addTo(map)
+
+      userMarkerRef.current = marker
+    } else {
+      userMarkerRef.current.setLngLat([lng, lat])
+      const popup = userMarkerRef.current.getPopup() || userPopupRef.current
+      if (popup) {
+        popup.setLngLat([lng, lat])
+        popup.setHTML(popupHTML)
+      } else {
+        const newPopup = new maplibregl.Popup({ offset: [0, -14], closeButton: true }).setHTML(popupHTML)
+        userPopupRef.current = newPopup
+        userMarkerRef.current.setPopup(newPopup)
+      }
+    }
+
+    setUserCoords({ lng, lat, accuracy })
+    setHasLocation(true)
+  }, [])
+
+  const startWatchingLocation = useCallback(() => {
+    if (!navigator.geolocation) return
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current)
+    }
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        updateUserMarker(pos.coords.longitude, pos.coords.latitude, pos.coords.accuracy)
+      },
+      (err) => {
+        console.warn('Geolocation watch error:', err.message)
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 10000,
+        timeout: 10000,
+      }
+    )
+  }, [updateUserMarker])
+
+  const handleCenterOnUser = useCallback(() => {
+    if (!navigator.geolocation) {
+      alert('Perangkat Anda tidak mendukung fitur lokasi.')
+      return
+    }
+
+    const map = mapInstance.current
+
+    // If user position is already active, fly to it immediately and display coordinate popup
+    if (hasLocation && userCoords && map) {
+      map.flyTo({
+        center: [userCoords.lng, userCoords.lat],
+        zoom: 16,
+        duration: 1200,
+        essential: true,
+      })
+      const popup = userMarkerRef.current?.getPopup() || userPopupRef.current
+      if (popup) {
+        popup.setLngLat([userCoords.lng, userCoords.lat]).addTo(map)
+      }
+      return
+    }
+
+    // Otherwise, request location permission and fly to position
+    setIsLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setIsLocating(false)
+        const lng = pos.coords.longitude
+        const lat = pos.coords.latitude
+        const accuracy = pos.coords.accuracy
+        updateUserMarker(lng, lat, accuracy)
+        map?.flyTo({
+          center: [lng, lat],
+          zoom: 16,
+          duration: 1200,
+          essential: true,
+        })
+        const popup = userMarkerRef.current?.getPopup() || userPopupRef.current
+        if (popup && map) {
+          popup.setLngLat([lng, lat]).addTo(map)
+        }
+        startWatchingLocation()
+      },
+      (err) => {
+        setIsLocating(false)
+        removeUserMarker()
+        console.warn('Gagal mendapatkan izin akses lokasi:', err)
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 5000,
+      }
+    )
+  }, [hasLocation, userCoords, updateUserMarker, startWatchingLocation, removeUserMarker])
+
+  // Check permission on mount / clean up watch on unmount
+  useEffect(() => {
+    if (!navigator.geolocation) return
+
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: 'geolocation' }).then((status) => {
+        if (status.state === 'granted') {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              updateUserMarker(pos.coords.longitude, pos.coords.latitude, pos.coords.accuracy)
+              startWatchingLocation()
+            },
+            () => removeUserMarker(),
+            { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 }
+          )
+        } else {
+          removeUserMarker()
+        }
+
+        status.onchange = () => {
+          if (status.state === 'granted') {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                updateUserMarker(pos.coords.longitude, pos.coords.latitude, pos.coords.accuracy)
+                startWatchingLocation()
+              },
+              () => removeUserMarker()
+            )
+          } else {
+            removeUserMarker()
+          }
+        }
+      }).catch(() => {
+        // unsupported permissions query
+      })
+    }
+
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current)
+        watchIdRef.current = null
+      }
+      userPopupRef.current?.remove()
+      userPopupRef.current = null
+      userMarkerRef.current?.remove()
+      userMarkerRef.current = null
+    }
+  }, [updateUserMarker, startWatchingLocation, removeUserMarker])
+
+  // If mapReady triggers and userCoords is known, re-sync marker
+  useEffect(() => {
+    if (mapReady && userCoords) {
+      updateUserMarker(userCoords.lng, userCoords.lat, userCoords.accuracy)
+    }
+  }, [mapReady, userCoords, updateUserMarker])
+
   useEffect(() => {
     if (mapControllerRef) {
       mapControllerRef.current = {
@@ -748,9 +985,10 @@ export default function MapView({
         flyToTrain,
         flyToCoordinates,
         getCenter,
+        flyToUser: handleCenterOnUser,
       }
     }
-  }, [mapControllerRef, flyToStation, flyToTrain, flyToCoordinates, getCenter])
+  }, [mapControllerRef, flyToStation, flyToTrain, flyToCoordinates, getCenter, handleCenterOnUser])
 
   return (
     <div className="relative w-full h-full">
@@ -758,35 +996,62 @@ export default function MapView({
 
       {/* Loading overlay */}
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-white/30 dark:bg-slate-950/40 backdrop-blur-sm z-10 pointer-events-none">
-          <div className="flex items-center gap-2.5 bg-white dark:bg-slate-900 rounded-xl px-4 py-2.5 shadow-lg border border-slate-200 dark:border-slate-800">
-            <Loader2 size={16} className="animate-spin text-[#4D6BFE] dark:text-blue-400" />
-            <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Memuat data stasiun, rute rel, dan kereta...</span>
+        <div className="absolute inset-0 flex items-center justify-center bg-white/30 backdrop-blur-sm z-10 pointer-events-none">
+          <div className="flex items-center gap-2.5 bg-white rounded-xl px-4 py-2.5 shadow-lg border border-slate-200">
+            <Loader2 size={16} className="animate-spin text-[#4D6BFE]" />
+            <span className="text-sm font-semibold text-slate-700">Memuat data stasiun, rute rel, dan kereta...</span>
           </div>
         </div>
       )}
 
-      {/* Controls (bottom left) - raised higher on mobile */}
-      <div className="absolute bottom-14 sm:bottom-6 left-4 z-10 flex items-center gap-2">
-        {/* Layer switcher */}
+      {/* Controls (bottom left) - Layer switcher */}
+      <div className="absolute bottom-[108px] sm:bottom-6 left-4 z-10 flex items-center gap-2 mobile-bottom-control">
         <button
           type="button"
           onClick={toggleLayerMode}
           className="
             flex items-center gap-2 px-3 py-2 rounded-xl
-            bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-800
-            shadow-[0_2px_8px_rgba(0,0,0,0.12)] hover:shadow-md hover:bg-white dark:hover:bg-slate-800
-            text-slate-800 dark:text-slate-100 text-xs font-semibold cursor-pointer transition-all active:scale-95
+            bg-white/95 backdrop-blur-md border border-slate-200/90
+            shadow-[0_2px_8px_rgba(0,0,0,0.12)] hover:shadow-md hover:bg-white
+            text-slate-800 text-xs font-semibold cursor-pointer transition-all active:scale-95
           "
         >
-          <div className="w-7 h-7 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+          <div className="w-7 h-7 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-slate-100 flex items-center justify-center">
             {layerMode === 'streets' ? (
-              <Layers size={14} className="text-[#4D6BFE] dark:text-blue-400" />
+              <Layers size={14} className="text-[#4D6BFE]" />
             ) : (
-              <Globe size={14} className="text-emerald-600 dark:text-emerald-400" />
+              <Globe size={14} className="text-emerald-600" />
             )}
           </div>
           <span>{layerMode === 'streets' ? 'Lapisan: Peta' : 'Lapisan: Satelit'}</span>
+        </button>
+      </div>
+
+      {/* Controls (bottom right) - Center on user location button (prominent, enlarged & elevated) */}
+      <div className="absolute bottom-[150px] sm:bottom-12 right-4 sm:right-6 z-10 flex items-center mobile-locate-control">
+        <button
+          type="button"
+          onClick={handleCenterOnUser}
+          title={hasLocation ? 'Pusatkan ke lokasi saya' : 'Izinkan lokasi dan pusatkan'}
+          aria-label={hasLocation ? 'Pusatkan ke lokasi saya' : 'Izinkan lokasi dan pusatkan'}
+          className={`
+            w-[58px] h-[58px] sm:w-[62px] sm:h-[62px] rounded-2xl
+            bg-white/95 backdrop-blur-md
+            shadow-[0_8px_24px_rgba(0,0,0,0.18)] hover:shadow-[0_12px_32px_rgba(0,0,0,0.22)]
+            flex items-center justify-center cursor-pointer transition-all duration-200 active:scale-90
+            ${hasLocation
+              ? 'border-2 border-blue-400 text-[#4D6BFE] hover:bg-blue-50/90 hover:text-blue-600 hover:border-blue-500'
+              : 'border border-slate-200/90 text-slate-400 hover:text-slate-600 hover:bg-slate-50'
+            }
+          `}
+        >
+          {isLocating ? (
+            <Loader2 size={28} className="animate-spin text-[#4D6BFE]" />
+          ) : hasLocation ? (
+            <LocateFixed size={28} className="text-[#4D6BFE]" />
+          ) : (
+            <Locate size={28} className="text-slate-400" />
+          )}
         </button>
       </div>
     </div>

@@ -358,10 +358,10 @@ export default function SearchBar({
       <div
         className={`
           flex items-center gap-2 px-3 h-12 rounded-full
-          bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border transition-all duration-200
+          bg-white/95 backdrop-blur-md border transition-all duration-200
           ${focused || isOpen
-            ? 'border-blue-400 dark:border-blue-500 shadow-[0_4px_20px_rgba(77,107,254,0.18)] ring-2 ring-blue-500/20'
-            : 'border-slate-200/90 dark:border-slate-800 shadow-[0_2px_8px_rgba(0,0,0,0.08),0_1px_3px_rgba(0,0,0,0.04)] hover:shadow-md hover:border-slate-300 dark:hover:border-slate-700'
+            ? 'border-blue-400 shadow-[0_4px_20px_rgba(77,107,254,0.18)] ring-2 ring-blue-500/20'
+            : 'border-slate-200/90 shadow-[0_2px_8px_rgba(0,0,0,0.08),0_1px_3px_rgba(0,0,0,0.04)] hover:shadow-md hover:border-slate-300'
           }
         `}
       >
@@ -371,7 +371,7 @@ export default function SearchBar({
           type="button"
           className="
             flex items-center justify-center w-8 h-8 rounded-full
-            text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800
+            text-slate-600 hover:text-slate-900 hover:bg-slate-100
             transition-colors shrink-0 cursor-pointer
           "
           aria-label="Buka menu"
