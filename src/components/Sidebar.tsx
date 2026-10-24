@@ -1235,21 +1235,21 @@ const KeretaPanel = ({
 
           {/* Quick Metrics Bar */}
           <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100 text-center">
-            <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100">
-              <div className="text-[10px] text-slate-400 font-semibold">Jadwal Operasi</div>
-              <div className="text-[11px] font-bold text-slate-800 font-mono mt-0.5">
+            <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100 min-w-0 break-words">
+              <div className="text-[10px] text-slate-400 font-semibold break-words leading-tight">Jadwal Operasi</div>
+              <div className="text-[11px] font-bold text-slate-800 font-mono mt-0.5 break-words">
                 {msToHHMM(selectedTrain.dep_ms)} - {msToHHMM(selectedTrain.arr_ms)}
               </div>
             </div>
-            <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100">
-              <div className="text-[10px] text-slate-400 font-semibold">Total Durasi</div>
-              <div className="text-[11px] font-bold text-slate-800 mt-0.5">
+            <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100 min-w-0 break-words">
+              <div className="text-[10px] text-slate-400 font-semibold break-words leading-tight">Total Durasi</div>
+              <div className="text-[11px] font-bold text-slate-800 mt-0.5 break-words">
                 {msToDuration(totalDuration)}
               </div>
             </div>
-            <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100">
-              <div className="text-[10px] text-slate-400 font-semibold">Pemberhentian</div>
-              <div className="text-[11px] font-bold text-[#4D6BFE] mt-0.5">
+            <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100 min-w-0 break-words">
+              <div className="text-[10px] text-slate-400 font-semibold break-words leading-tight">Pemberhentian</div>
+              <div className="text-[11px] font-bold text-[#4D6BFE] mt-0.5 break-words">
                 {displayStops.length} Stasiun
               </div>
             </div>
@@ -1258,12 +1258,16 @@ const KeretaPanel = ({
           {/* Progress bar if active */}
           {isActive && (
             <div className="p-2.5 rounded-xl bg-[#EEF3FF] border border-[#DCE4FF] space-y-1.5">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-[#4D6BFE] flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
-                  Stasiun Berikutnya: <strong className="text-slate-900">{nextStopName}</strong>
-                </span>
-                <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+              <div className="flex items-start justify-between text-xs gap-2">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-semibold text-[#4D6BFE] uppercase tracking-wider">
+                    Stasiun Berikutnya:
+                  </div>
+                  <div className="text-xs font-bold text-slate-900 truncate mt-0.5">
+                    {nextStopName}
+                  </div>
+                </div>
+                <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 shrink-0">
                   {nextStopEta ? `~${nextStopEta}` : 'Segera'}
                 </span>
               </div>
@@ -1300,7 +1304,10 @@ const KeretaPanel = ({
           </div>
 
           {/* Vertical Timeline */}
-          <div className="relative pl-6 space-y-3.5 before:absolute before:left-2.5 before:top-2.5 before:bottom-2.5 before:w-0.5 before:bg-slate-200">
+          <div className="relative pl-8 space-y-3.5">
+            {/* Straight vertical stepper line */}
+            <div className="absolute left-[16px] top-5 bottom-5 w-0.5 -translate-x-1/2 bg-slate-200" />
+
             {displayStops.map((stop, idx) => {
               const isOrigin = idx === 0
               const isTerminus = idx === displayStops.length - 1
@@ -1341,9 +1348,9 @@ const KeretaPanel = ({
                       : 'bg-white border-slate-200 hover:border-blue-300'
                   }`}
                 >
-                  {/* Timeline bullet on vertical line */}
+                  {/* Timeline bullet exactly centered on the vertical line */}
                   <div
-                    className={`absolute -left-[27px] top-3 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all ${
+                    className={`absolute -left-[16px] top-3.5 w-4 h-4 -translate-x-1/2 rounded-full border-2 flex items-center justify-center transition-all ${
                       isNext
                         ? 'bg-[#4D6BFE] border-white ring-4 ring-[#4D6BFE]/30'
                         : isPassed

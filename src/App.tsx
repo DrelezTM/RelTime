@@ -95,6 +95,12 @@ export default function App() {
     mapControllerRef.current?.flyToTrain(train.code, train.id, train.name)
   }, [])
 
+  const handleViewTrainDetail = useCallback((train: Train) => {
+    setSelectedKeretaTrain({ ...train })
+    setSidebarTab('kereta')
+    setSidebarOpen(true)
+  }, [])
+
   const handleFlyToStation = useCallback((stationCode: string) => {
     setActiveFilters((prev) => (prev.includes('stasiun') ? prev : [...prev, 'stasiun']))
     mapControllerRef.current?.flyToStation(stationCode)
@@ -115,6 +121,7 @@ export default function App() {
           onDataLoaded={handleDataLoaded}
           mapControllerRef={mapControllerRef}
           onViewStationSchedule={handleViewStationSchedule}
+          onViewTrainDetail={handleViewTrainDetail}
         />
       </div>
 

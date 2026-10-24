@@ -25,6 +25,7 @@ interface MapViewProps {
   onDataLoaded?: (stations: Station[], trains: Train[]) => void
   mapControllerRef?: React.MutableRefObject<MapController | null>
   onViewStationSchedule?: (station: Station) => void
+  onViewTrainDetail?: (train: Train) => void
 }
 
 type MapLayerMode = 'streets' | 'satellite'
@@ -358,6 +359,19 @@ function createTrainPopupHTML(
       <div style="padding-top:6px;border-top:1px solid ${borderColor};font-size:10.5px;color:${subColor};">
         Stasiun Berikutnya: <strong style="color:${textColor};">${nextStopName}</strong> (${etaNext})
       </div>
+      <button
+        type="button"
+        id="btn-train-view-detail-${train.id}"
+        class="view-train-detail-btn"
+        data-train-id="${train.id}"
+        data-train-code="${train.code}"
+        style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:8px;padding:6px 10px;border-radius:8px;background:#4D6BFE;border:none;color:#ffffff;font-size:11px;font-weight:700;cursor:pointer;box-shadow:0 2px 6px rgba(77,107,254,0.3);font-family:inherit;transition:background 0.15s ease;"
+        onmouseover="this.style.background='#3B5BFE'"
+        onmouseout="this.style.background='#4D6BFE'"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><rect width="16" height="16" x="4" y="3" rx="2"/><path d="M4 11h16"/><path d="M12 3v8"/><path d="m8 19-2 3"/><path d="m18 22-2-3"/><path d="M8 15h0"/><path d="M16 15h0"/></svg>
+        <span>Lihat Kereta</span>
+      </button>
     </div>
   `
 }
@@ -406,6 +420,7 @@ export default function MapView({
   onDataLoaded,
   mapControllerRef,
   onViewStationSchedule,
+  onViewTrainDetail,
 }: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstance = useRef<maplibregl.Map | null>(null)
@@ -429,9 +444,30 @@ export default function MapView({
   const [hasLocation, setHasLocation] = useState(false)
   const [isLocating, setIsLocating] = useState(false)
 
-  // Catch clicks on "Lihat Jadwal" button inside station popups
+  // Catch clicks on "Lihat Jadwal" and "Lihat Kereta" buttons inside popups
   useEffect(() => {
     const handleDocumentClick = (e: MouseEvent) => {
+      // 1. Train popup "Lihat Kereta" button
+      const trainBtn = (e.target as HTMLElement).closest('.view-train-detail-btn') as HTMLElement | null
+      if (trainBtn) {
+        e.preventDefault()
+        e.stopPropagation()
+        const trainId = trainBtn.getAttribute('data-train-id')
+        const trainCode = trainBtn.getAttribute('data-train-code')
+        const targetTrain =
+          trains.find((t) => (trainId && String(t.id) === trainId) || (trainCode && t.code.toLowerCase() === trainCode.toLowerCase())) ||
+          (trainCode ? trainMarkersMapRef.current.get(trainCode.toLowerCase())?.train : undefined) ||
+          (trainId ? trainMarkersMapRef.current.get(trainId)?.train : undefined)
+
+        if (targetTrain && onViewTrainDetail) {
+          activePopupRef.current?.remove()
+          document.querySelectorAll('.maplibregl-popup').forEach((p) => p.remove())
+          onViewTrainDetail(targetTrain)
+        }
+        return
+      }
+
+      // 2. Station popup "Lihat Jadwal" button
       const btn = (e.target as HTMLElement).closest('.view-station-schedule-btn') as HTMLElement | null
       if (btn) {
         e.preventDefault()
@@ -453,7 +489,7 @@ export default function MapView({
 
     document.addEventListener('click', handleDocumentClick, true)
     return () => document.removeEventListener('click', handleDocumentClick, true)
-  }, [stations, onViewStationSchedule])
+  }, [stations, trains, onViewStationSchedule, onViewTrainDetail])
 
   const loadData = useCallback((forceRefresh = false) => {
     if (forceRefresh) clearApiCache()
